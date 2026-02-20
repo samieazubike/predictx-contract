@@ -44,6 +44,29 @@ A shared types crate (`predictx-shared`) provides common data structures, error 
 - **Target**: `wasm32-unknown-unknown`
 - **Toolchain**: Stable Rust
 
+## Workspace Layout
+
+This repository is a **multi-contract Cargo workspace**. Each contract is its
+own `cdylib` crate and compiles to a separate WASM binary.
+
+```
+predictx-contract/
+├── Cargo.toml
+├── rust-toolchain.toml
+├── contracts/
+│   ├── prediction-market/
+│   ├── poll-factory/
+│   ├── voting-oracle/
+│   └── treasury/
+├── packages/
+│   └── shared/
+├── scripts/
+│   └── deploy.sh
+└── docs/
+    └── adr/
+        └── 0001-multi-contract-workspace.md
+```
+
 ## Prerequisites
 
 - [Rust](https://rustup.rs/) (stable)
@@ -74,12 +97,13 @@ cargo test -- --nocapture
 
 ```
 predictx-contract/
-├── Cargo.toml              # Workspace manifest
-├── predictx-spec.md        # Full product specification
-├── rust-toolchain.toml     # Rust toolchain config
-├── src/
-│   └── lib.rs              # Contract entry point
-└── issues/                 # GitHub issue specs (development roadmap)
+├── Cargo.toml                 # Workspace manifest
+├── predictx-spec.md           # Full product specification
+├── rust-toolchain.toml        # Rust toolchain config
+├── contracts/                 # Soroban contracts (one WASM each)
+├── packages/shared/           # Shared types/errors/constants
+├── scripts/deploy.sh          # Build + deploy helper
+└── docs/adr/                  # Architecture decision records
 ```
 
 ## Development Roadmap

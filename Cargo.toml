@@ -1,16 +1,13 @@
-[package]
-name = "predictx_contract"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+resolver = "2"
+members = [
+    "contracts/*",
+    "packages/*",
+]
 
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
+[workspace.dependencies]
 soroban-sdk = "22.0.0"
-
-[dev-dependencies]
-soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+predictx-shared = { path = "packages/shared" }
 
 [profile.release]
 opt-level = "z"
