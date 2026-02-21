@@ -1,6 +1,6 @@
 #![no_std]
 
-use predictx_shared::{Error, PollStatus};
+use predictx_shared::{PredictXError, PollStatus};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 mod voting_oracle {
@@ -9,11 +9,13 @@ mod voting_oracle {
 
 fn map_oracle_poll_status(status: voting_oracle::PollStatus) -> PollStatus {
     match status {
-        voting_oracle::PollStatus::Open => PollStatus::Open,
-        voting_oracle::PollStatus::Locked => PollStatus::Locked,
-        voting_oracle::PollStatus::Resolved => PollStatus::Resolved,
-        voting_oracle::PollStatus::Disputed => PollStatus::Disputed,
-        voting_oracle::PollStatus::Cancelled => PollStatus::Cancelled,
+		voting_oracle::PollStatus::Active      => PollStatus::Active,
+		voting_oracle::PollStatus::Locked      => PollStatus::Locked,
+		voting_oracle::PollStatus::Voting      => PollStatus::Voting,
+		voting_oracle::PollStatus::AdminReview => PollStatus::AdminReview,
+		voting_oracle::PollStatus::Disputed    => PollStatus::Disputed,
+		voting_oracle::PollStatus::Resolved    => PollStatus::Resolved,
+		voting_oracle::PollStatus::Cancelled   => PollStatus::Cancelled,
     }
 }
 
@@ -27,25 +29,25 @@ enum DataKey {
     VotingOracle,
 }
 
-fn get_admin(env: &Env) -> Result<Address, Error> {
+fn get_admin(env: &Env) -> Result<Address, PredictXError> {
     env.storage()
         .instance()
         .get(&DataKey::Admin)
-        .ok_or(Error::NotInitialized)
+        .ok_or(PredictXError::NotInitialized)
 }
 
-fn get_oracle(env: &Env) -> Result<Address, Error> {
+fn get_oracle(env: &Env) -> Result<Address, PredictXError> {
     env.storage()
         .instance()
         .get(&DataKey::VotingOracle)
-        .ok_or(Error::NotInitialized)
+        .ok_or(PredictXError::NotInitialized)
 }
 
 #[contractimpl]
 impl PredictionMarket {
-    pub fn initialize(env: Env, admin: Address, voting_oracle: Address) -> Result<(), Error> {
+    pub fn initialize(env: Env, admin: Address, voting_oracle: Address) -> Result<(), PredictXError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            return Err(Error::AlreadyInitialized);
+            return Err(PredictXError::AlreadyInitialized);
         }
 
         admin.require_auth();
@@ -57,15 +59,15 @@ impl PredictionMarket {
         Ok(())
     }
 
-    pub fn admin(env: Env) -> Result<Address, Error> {
+    pub fn admin(env: Env) -> Result<Address, PredictXError> {
         get_admin(&env)
     }
 
-    pub fn oracle(env: Env) -> Result<Address, Error> {
+    pub fn oracle(env: Env) -> Result<Address, PredictXError> {
         get_oracle(&env)
     }
 
-    pub fn set_oracle(env: Env, voting_oracle: Address) -> Result<(), Error> {
+    pub fn set_oracle(env: Env, voting_oracle: Address) -> Result<(), PredictXError> {
         let admin = get_admin(&env)?;
         admin.require_auth();
 
@@ -78,7 +80,7 @@ impl PredictionMarket {
     /// Minimal cross-contract invocation example.
     ///
     /// Calls into the `VotingOracle` contract to fetch the current status for a poll.
-    pub fn oracle_poll_status(env: Env, poll_id: u64) -> Result<PollStatus, Error> {
+    pub fn oracle_poll_status(env: Env, poll_id: u64) -> Result<PollStatus, PredictXError> {
         let oracle_id = get_oracle(&env)?;
         let client = voting_oracle::Client::new(&env, &oracle_id);
         Ok(map_oracle_poll_status(client.get_poll_status(&poll_id)))
@@ -124,7 +126,7 @@ mod test {
         let err = client
             .try_initialize(&admin, &oracle)
             .expect_err("should fail");
-        assert_eq!(err, Ok(Error::AlreadyInitialized));
+        assert_eq!(err, Ok(PredictXError::AlreadyInitialized));
     }
 
     #[test]

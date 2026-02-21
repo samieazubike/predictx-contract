@@ -1,6 +1,6 @@
 #![no_std]
 
-use predictx_shared::Error;
+use predictx_shared::PredictXError;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 #[contract]
@@ -13,11 +13,11 @@ enum DataKey {
     Balance(Address),
 }
 
-fn get_admin(env: &Env) -> Result<Address, Error> {
+fn get_admin(env: &Env) -> Result<Address, PredictXError> {
     env.storage()
         .instance()
         .get(&DataKey::Admin)
-        .ok_or(Error::NotInitialized)
+        .ok_or(PredictXError::NotInitialized)
 }
 
 fn get_balance(env: &Env, who: &Address) -> i128 {
@@ -29,9 +29,9 @@ fn get_balance(env: &Env, who: &Address) -> i128 {
 
 #[contractimpl]
 impl Treasury {
-    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+    pub fn initialize(env: Env, admin: Address) -> Result<(), PredictXError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            return Err(Error::AlreadyInitialized);
+            return Err(PredictXError::AlreadyInitialized);
         }
 
         admin.require_auth();
@@ -39,19 +39,19 @@ impl Treasury {
         Ok(())
     }
 
-    pub fn admin(env: Env) -> Result<Address, Error> {
+    pub fn admin(env: Env) -> Result<Address, PredictXError> {
         get_admin(&env)
     }
 
     /// Placeholder accounting method.
     ///
     /// Real token transfers are integrated in later issues.
-    pub fn deposit(env: Env, from: Address, amount: i128) -> Result<i128, Error> {
+    pub fn deposit(env: Env, from: Address, amount: i128) -> Result<i128, PredictXError> {
         if amount <= 0 {
-            return Err(Error::InvalidArgument);
+            return Err(PredictXError::StakeAmountZero);
         }
         if !env.storage().instance().has(&DataKey::Admin) {
-            return Err(Error::NotInitialized);
+            return Err(PredictXError::NotInitialized);
         }
         from.require_auth();
 
@@ -62,9 +62,9 @@ impl Treasury {
         Ok(new_balance)
     }
 
-    pub fn balance(env: Env, who: Address) -> Result<i128, Error> {
+    pub fn balance(env: Env, who: Address) -> Result<i128, PredictXError> {
         if !env.storage().instance().has(&DataKey::Admin) {
-            return Err(Error::NotInitialized);
+            return Err(PredictXError::NotInitialized);
         }
         Ok(get_balance(&env, &who))
     }
