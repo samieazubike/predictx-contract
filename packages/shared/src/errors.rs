@@ -68,4 +68,6 @@ pub enum PredictXError {
     EmergencyWithdrawNotAllowed = 31,
     /// Token transfer failed.
     TransferFailed = 32,
+    /// Contract is paused.
+    ContractPaused = 33,
 }

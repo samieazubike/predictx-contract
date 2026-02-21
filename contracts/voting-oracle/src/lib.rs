@@ -8,6 +8,13 @@ pub struct VotingOracle;
 
 #[contracttype]
 #[derive(Clone)]
+struct StoredPollStatus {
+    status: PollStatus,
+    updated_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone)]
 enum DataKey {
     Admin,
     PollStatus(u64),
@@ -44,18 +51,34 @@ impl VotingOracle {
         let admin = get_admin(&env)?;
         admin.require_auth();
 
+        let stored = StoredPollStatus {
+            status,
+            updated_at: env.ledger().timestamp(),
+        };
+
         env.storage()
             .persistent()
-            .set(&DataKey::PollStatus(poll_id), &status);
+            .set(&DataKey::PollStatus(poll_id), &stored);
         Ok(())
     }
 
     /// Placeholder oracle query used by `PredictionMarket`.
     pub fn get_poll_status(env: Env, poll_id: u64) -> PollStatus {
-        env.storage()
+        let stored: Option<StoredPollStatus> = env
+            .storage()
             .persistent()
-            .get(&DataKey::PollStatus(poll_id))
-            .unwrap_or(PollStatus::Active)
+            .get(&DataKey::PollStatus(poll_id));
+
+        stored.map(|s| s.status).unwrap_or(PollStatus::Active)
+    }
+
+    pub fn get_poll_status_updated_at(env: Env, poll_id: u64) -> u64 {
+        let stored: Option<StoredPollStatus> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PollStatus(poll_id));
+
+        stored.map(|s| s.updated_at).unwrap_or(0)
     }
 }
 
