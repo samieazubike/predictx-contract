@@ -1,6 +1,6 @@
 #![no_std]
 
-use predictx_shared::{Error, Poll, PollStatus};
+use predictx_shared::{PredictXError, Poll, PollCategory, PollStatus};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
 
 #[contract]
@@ -14,11 +14,11 @@ enum DataKey {
     Poll(u64),
 }
 
-fn get_admin(env: &Env) -> Result<Address, Error> {
+fn get_admin(env: &Env) -> Result<Address, PredictXError> {
     env.storage()
         .instance()
         .get(&DataKey::Admin)
-        .ok_or(Error::NotInitialized)
+        .ok_or(PredictXError::NotInitialized)
 }
 
 fn next_poll_id(env: &Env) -> u64 {
@@ -33,9 +33,9 @@ fn bump_poll_id(env: &Env) -> u64 {
 
 #[contractimpl]
 impl PollFactory {
-    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+    pub fn initialize(env: Env, admin: Address) -> Result<(), PredictXError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            return Err(Error::AlreadyInitialized);
+            return Err(PredictXError::AlreadyInitialized);
         }
 
         admin.require_auth();
@@ -44,7 +44,7 @@ impl PollFactory {
         Ok(())
     }
 
-    pub fn admin(env: Env) -> Result<Address, Error> {
+    pub fn admin(env: Env) -> Result<Address, PredictXError> {
         get_admin(&env)
     }
 
@@ -53,19 +53,28 @@ impl PollFactory {
         creator: Address,
         question: String,
         lock_timestamp: u64,
-    ) -> Result<u64, Error> {
+    ) -> Result<u64, PredictXError> {
         if !env.storage().instance().has(&DataKey::Admin) {
-            return Err(Error::NotInitialized);
+            return Err(PredictXError::NotInitialized);
         }
         creator.require_auth();
 
         let poll_id = bump_poll_id(&env);
         let poll = Poll {
-            id: poll_id,
-            creator,
-            question,
-            status: PollStatus::Open,
-            lock_timestamp,
+            poll_id,
+    			match_id: 0,                          // polls not linked to matches yet
+    			creator: creator.clone(),
+				question,
+				category: PollCategory::Other,
+				lock_time: lock_timestamp,
+				yes_pool: 0,
+				no_pool: 0,
+				yes_count: 0,
+				no_count: 0,
+				status: PollStatus::Active,
+				outcome: None,
+				resolution_time: 0,
+				created_at: env.ledger().timestamp(),
         };
 
         env.storage()
@@ -74,11 +83,11 @@ impl PollFactory {
         Ok(poll_id)
     }
 
-    pub fn get_poll(env: Env, poll_id: u64) -> Result<Poll, Error> {
+    pub fn get_poll(env: Env, poll_id: u64) -> Result<Poll, PredictXError> {
         env.storage()
             .persistent()
             .get(&DataKey::Poll(poll_id))
-            .ok_or(Error::PollNotFound)
+            .ok_or(PredictXError::PollNotFound)
     }
 }
 
@@ -107,10 +116,10 @@ mod test {
         let poll_id = client.create_poll(&creator, &question, &123_u64);
         let poll = client.get_poll(&poll_id);
 
-        assert_eq!(poll.id, poll_id);
+        assert_eq!(poll.poll_id, poll_id);
         assert_eq!(poll.creator, creator);
         assert_eq!(poll.question, question);
-        assert_eq!(poll.status, PollStatus::Open);
-        assert_eq!(poll.lock_timestamp, 123_u64);
+        assert_eq!(poll.status, PollStatus::Active);
+        assert_eq!(poll.lock_time, 123_u64);
     }
 }

@@ -1,6 +1,6 @@
 #![no_std]
 
-use predictx_shared::{Error, PollStatus};
+use predictx_shared::{PredictXError, PollStatus};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 #[contract]
@@ -13,18 +13,18 @@ enum DataKey {
     PollStatus(u64),
 }
 
-fn get_admin(env: &Env) -> Result<Address, Error> {
+fn get_admin(env: &Env) -> Result<Address, PredictXError> {
     env.storage()
         .instance()
         .get(&DataKey::Admin)
-        .ok_or(Error::NotInitialized)
+        .ok_or(PredictXError::NotInitialized)
 }
 
 #[contractimpl]
 impl VotingOracle {
-    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+    pub fn initialize(env: Env, admin: Address) -> Result<(), PredictXError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            return Err(Error::AlreadyInitialized);
+            return Err(PredictXError::AlreadyInitialized);
         }
         admin.require_auth();
 
@@ -32,7 +32,7 @@ impl VotingOracle {
         Ok(())
     }
 
-    pub fn admin(env: Env) -> Result<Address, Error> {
+    pub fn admin(env: Env) -> Result<Address, PredictXError> {
         get_admin(&env)
     }
 
@@ -40,7 +40,7 @@ impl VotingOracle {
     ///
     /// This exists only to validate cross-contract invocation patterns during
     /// Phase 1 scaffolding.
-    pub fn set_poll_status(env: Env, poll_id: u64, status: PollStatus) -> Result<(), Error> {
+    pub fn set_poll_status(env: Env, poll_id: u64, status: PollStatus) -> Result<(), PredictXError> {
         let admin = get_admin(&env)?;
         admin.require_auth();
 
@@ -55,7 +55,7 @@ impl VotingOracle {
         env.storage()
             .persistent()
             .get(&DataKey::PollStatus(poll_id))
-            .unwrap_or(PollStatus::Open)
+            .unwrap_or(PollStatus::Active)
     }
 }
 
