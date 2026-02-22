@@ -1,8 +1,9 @@
 #![no_std]
 
 mod matches;
+mod staking;
 
-use predictx_shared::{Match, PlatformStats, PredictXError, PollStatus, Stake};
+use predictx_shared::{Match, PlatformStats, PredictXError, PollStatus, Stake, StakeSide};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec};
 
 mod voting_oracle {
@@ -11,13 +12,13 @@ mod voting_oracle {
 
 fn map_oracle_poll_status(status: voting_oracle::PollStatus) -> PollStatus {
     match status {
-        voting_oracle::PollStatus::Active      => PollStatus::Active,
-        voting_oracle::PollStatus::Locked      => PollStatus::Locked,
-        voting_oracle::PollStatus::Voting      => PollStatus::Voting,
+        voting_oracle::PollStatus::Active => PollStatus::Active,
+        voting_oracle::PollStatus::Locked => PollStatus::Locked,
+        voting_oracle::PollStatus::Voting => PollStatus::Voting,
         voting_oracle::PollStatus::AdminReview => PollStatus::AdminReview,
-        voting_oracle::PollStatus::Disputed    => PollStatus::Disputed,
-        voting_oracle::PollStatus::Resolved    => PollStatus::Resolved,
-        voting_oracle::PollStatus::Cancelled   => PollStatus::Cancelled,
+        voting_oracle::PollStatus::Disputed => PollStatus::Disputed,
+        voting_oracle::PollStatus::Resolved => PollStatus::Resolved,
+        voting_oracle::PollStatus::Cancelled => PollStatus::Cancelled,
     }
 }
 
@@ -39,20 +40,33 @@ pub enum DataKey {
     NextMatchId,
     Match(u64),
     MatchPolls(u64),
+    // ── staking keys ──────────────────────────────────────────────────────────
+    TokenAddress,
+    Poll(u64),
+    StakeRecord(u64, Address),
+    HasStaked(u64, Address),
+    UserStakes(Address),
 }
 
 fn get_admin(env: &Env) -> Result<Address, PredictXError> {
-    env.storage().instance().get(&DataKey::Admin)
+    env.storage()
+        .instance()
+        .get(&DataKey::Admin)
         .ok_or(PredictXError::NotInitialized)
 }
 
 fn get_oracle(env: &Env) -> Result<Address, PredictXError> {
-    env.storage().instance().get(&DataKey::VotingOracle)
+    env.storage()
+        .instance()
+        .get(&DataKey::VotingOracle)
         .ok_or(PredictXError::NotInitialized)
 }
 
 fn is_paused(env: &Env) -> bool {
-    env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
 }
 
 fn ensure_not_paused(env: &Env) -> Result<(), PredictXError> {
@@ -62,8 +76,10 @@ fn ensure_not_paused(env: &Env) -> Result<(), PredictXError> {
     Ok(())
 }
 
-fn get_platform_stats(env: &Env) -> PlatformStats {
-    env.storage().instance().get(&DataKey::PlatformStats)
+pub(crate) fn get_platform_stats(env: &Env) -> PlatformStats {
+    env.storage()
+        .instance()
+        .get(&DataKey::PlatformStats)
         .unwrap_or(PlatformStats {
             total_value_locked: 0,
             total_polls_created: 0,
@@ -73,22 +89,26 @@ fn get_platform_stats(env: &Env) -> PlatformStats {
         })
 }
 
-fn set_platform_stats(env: &Env, stats: &PlatformStats) {
+pub(crate) fn set_platform_stats(env: &Env, stats: &PlatformStats) {
     env.storage().instance().set(&DataKey::PlatformStats, stats);
 }
 
 fn get_stake(env: &Env, poll_id: u64, user: &Address) -> Option<Stake> {
-    env.storage().persistent().get(&DataKey::Stake(poll_id, user.clone()))
+    env.storage()
+        .persistent()
+        .get(&DataKey::Stake(poll_id, user.clone()))
 }
 
 fn has_emergency_claimed(env: &Env, poll_id: u64, user: &Address) -> bool {
-    env.storage().persistent()
+    env.storage()
+        .persistent()
         .get(&DataKey::EmergencyClaimed(poll_id, user.clone()))
         .unwrap_or(false)
 }
 
 fn set_emergency_claimed(env: &Env, poll_id: u64, user: &Address) {
-    env.storage().persistent()
+    env.storage()
+        .persistent()
         .set(&DataKey::EmergencyClaimed(poll_id, user.clone()), &true);
 }
 
@@ -96,48 +116,68 @@ const EMERGENCY_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
 
 #[contractimpl]
 impl PredictionMarket {
-    pub fn initialize(env: Env, admin: Address, voting_oracle: Address) -> Result<(), PredictXError> {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        voting_oracle: Address,
+    ) -> Result<(), PredictXError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(PredictXError::AlreadyInitialized);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::VotingOracle, &voting_oracle);
+        env.storage()
+            .instance()
+            .set(&DataKey::VotingOracle, &voting_oracle);
         env.storage().instance().set(&DataKey::NextMatchId, &1u64);
         env.storage().instance().set(&DataKey::Initialized, &true);
         Ok(())
     }
 
-    pub fn admin(env: Env) -> Result<Address, PredictXError> { get_admin(&env) }
-    pub fn oracle(env: Env) -> Result<Address, PredictXError> { get_oracle(&env) }
+    pub fn admin(env: Env) -> Result<Address, PredictXError> {
+        get_admin(&env)
+    }
+    pub fn oracle(env: Env) -> Result<Address, PredictXError> {
+        get_oracle(&env)
+    }
 
     pub fn set_oracle(env: Env, voting_oracle: Address) -> Result<(), PredictXError> {
         ensure_not_paused(&env)?;
         let admin = get_admin(&env)?;
         admin.require_auth();
-        env.storage().instance().set(&DataKey::VotingOracle, &voting_oracle);
+        env.storage()
+            .instance()
+            .set(&DataKey::VotingOracle, &voting_oracle);
         Ok(())
     }
 
     pub fn pause(env: Env, admin: Address) -> Result<(), PredictXError> {
         let stored_admin = get_admin(&env)?;
-        if admin != stored_admin { return Err(PredictXError::Unauthorized); }
+        if admin != stored_admin {
+            return Err(PredictXError::Unauthorized);
+        }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
-        env.events().publish((Symbol::new(&env, "ContractPaused"),), true);
+        env.events()
+            .publish((Symbol::new(&env, "ContractPaused"),), true);
         Ok(())
     }
 
     pub fn unpause(env: Env, admin: Address) -> Result<(), PredictXError> {
         let stored_admin = get_admin(&env)?;
-        if admin != stored_admin { return Err(PredictXError::Unauthorized); }
+        if admin != stored_admin {
+            return Err(PredictXError::Unauthorized);
+        }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
-        env.events().publish((Symbol::new(&env, "ContractUnpaused"),), true);
+        env.events()
+            .publish((Symbol::new(&env, "ContractUnpaused"),), true);
         Ok(())
     }
 
-    pub fn is_paused(env: Env) -> bool { is_paused(&env) }
+    pub fn is_paused(env: Env) -> bool {
+        is_paused(&env)
+    }
 
     pub fn oracle_poll_status(env: Env, poll_id: u64) -> Result<PollStatus, PredictXError> {
         let oracle_id = get_oracle(&env)?;
@@ -148,12 +188,15 @@ impl PredictionMarket {
     pub fn cancel_poll(env: Env, admin: Address, poll_id: u64) -> Result<(), PredictXError> {
         ensure_not_paused(&env)?;
         let stored_admin = get_admin(&env)?;
-        if admin != stored_admin { return Err(PredictXError::Unauthorized); }
+        if admin != stored_admin {
+            return Err(PredictXError::Unauthorized);
+        }
         admin.require_auth();
         let oracle_id = get_oracle(&env)?;
         let client = voting_oracle::Client::new(&env, &oracle_id);
         client.set_poll_status(&poll_id, &voting_oracle::PollStatus::Cancelled);
-        env.events().publish((Symbol::new(&env, "PollCancelled"),), poll_id);
+        env.events()
+            .publish((Symbol::new(&env, "PollCancelled"),), poll_id);
         Ok(())
     }
 
@@ -164,14 +207,24 @@ impl PredictionMarket {
         };
         let client = voting_oracle::Client::new(&env, &oracle_id);
         let status = map_oracle_poll_status(client.get_poll_status(&poll_id));
-        if status == PollStatus::Cancelled { return true; }
-        if status != PollStatus::Disputed && status != PollStatus::Locked { return false; }
+        if status == PollStatus::Cancelled {
+            return true;
+        }
+        if status != PollStatus::Disputed && status != PollStatus::Locked {
+            return false;
+        }
         let updated_at = client.get_poll_status_updated_at(&poll_id);
-        if updated_at == 0 { return false; }
+        if updated_at == 0 {
+            return false;
+        }
         env.ledger().timestamp().saturating_sub(updated_at) >= EMERGENCY_TIMEOUT_SECS
     }
 
-    pub fn emergency_withdraw(env: Env, user: Address, poll_id: u64) -> Result<i128, PredictXError> {
+    pub fn emergency_withdraw(
+        env: Env,
+        user: Address,
+        poll_id: u64,
+    ) -> Result<i128, PredictXError> {
         user.require_auth();
         if has_emergency_claimed(&env, poll_id, &user) {
             return Err(PredictXError::AlreadyClaimed);
@@ -183,38 +236,72 @@ impl PredictionMarket {
             true
         } else if status == PollStatus::Disputed || status == PollStatus::Locked {
             let updated_at = client.get_poll_status_updated_at(&poll_id);
-            updated_at != 0 && env.ledger().timestamp().saturating_sub(updated_at) >= EMERGENCY_TIMEOUT_SECS
+            updated_at != 0
+                && env.ledger().timestamp().saturating_sub(updated_at) >= EMERGENCY_TIMEOUT_SECS
         } else {
             false
         };
-        if !eligible { return Err(PredictXError::EmergencyWithdrawNotAllowed); }
+        if !eligible {
+            return Err(PredictXError::EmergencyWithdrawNotAllowed);
+        }
         let stake = get_stake(&env, poll_id, &user).ok_or(PredictXError::NotStaker)?;
         set_emergency_claimed(&env, poll_id, &user);
         let mut stats = get_platform_stats(&env);
         stats.total_value_locked -= stake.amount;
         set_platform_stats(&env, &stats);
-        env.events().publish((Symbol::new(&env, "EmergencyWithdrawal"), poll_id, user.clone()), stake.amount);
+        env.events().publish(
+            (
+                Symbol::new(&env, "EmergencyWithdrawal"),
+                poll_id,
+                user.clone(),
+            ),
+            stake.amount,
+        );
         Ok(stake.amount)
     }
 
     // ── Match management ──────────────────────────────────────────────────────
 
     pub fn create_match(
-        env: Env, admin: Address,
-        home_team: String, away_team: String,
-        league: String, venue: String,
+        env: Env,
+        admin: Address,
+        home_team: String,
+        away_team: String,
+        league: String,
+        venue: String,
         kickoff_time: u64,
     ) -> Result<u64, PredictXError> {
-        matches::create_match(&env, admin, home_team, away_team, league, venue, kickoff_time)
+        matches::create_match(
+            &env,
+            admin,
+            home_team,
+            away_team,
+            league,
+            venue,
+            kickoff_time,
+        )
     }
 
     pub fn update_match(
-        env: Env, admin: Address, match_id: u64,
-        home_team: Option<String>, away_team: Option<String>,
-        league: Option<String>, venue: Option<String>,
+        env: Env,
+        admin: Address,
+        match_id: u64,
+        home_team: Option<String>,
+        away_team: Option<String>,
+        league: Option<String>,
+        venue: Option<String>,
         kickoff_time: Option<u64>,
     ) -> Result<Match, PredictXError> {
-        matches::update_match(&env, admin, match_id, home_team, away_team, league, venue, kickoff_time)
+        matches::update_match(
+            &env,
+            admin,
+            match_id,
+            home_team,
+            away_team,
+            league,
+            venue,
+            kickoff_time,
+        )
     }
 
     pub fn finish_match(env: Env, admin: Address, match_id: u64) -> Result<(), PredictXError> {
@@ -231,6 +318,47 @@ impl PredictionMarket {
 
     pub fn get_match_count(env: Env) -> u64 {
         matches::get_match_count(&env)
+    }
+	 // ── Token config ──────────────────────────────────────────────────────────
+
+    pub fn set_token(env: Env, token: Address) -> Result<(), PredictXError> {
+        get_admin(&env)?;
+        env.storage().instance().set(&DataKey::TokenAddress, &token);
+        Ok(())
+    }
+
+    pub fn get_token(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::TokenAddress).unwrap()
+    }
+
+    // ── Staking ───────────────────────────────────────────────────────────────
+
+    pub fn stake(
+        env: Env, staker: Address, poll_id: u64, amount: i128, side: StakeSide,
+    ) -> Result<Stake, PredictXError> {
+        staking::stake(&env, staker, poll_id, amount, side)
+    }
+
+    pub fn get_stake(env: Env, poll_id: u64, user: Address) -> Result<Stake, PredictXError> {
+        staking::get_stake(&env, poll_id, user)
+    }
+
+    pub fn get_user_stakes(env: Env, user: Address) -> Vec<u64> {
+        staking::get_user_stakes(&env, user)
+    }
+
+    pub fn has_staked(env: Env, poll_id: u64, user: Address) -> bool {
+        staking::has_staked(&env, poll_id, user)
+    }
+
+    pub fn calculate_potential_winnings(
+        env: Env, poll_id: u64, side: StakeSide, amount: i128,
+    ) -> Result<i128, PredictXError> {
+        staking::calculate_potential_winnings(&env, poll_id, side, amount)
+    }
+
+    pub fn get_pool_info(env: Env, poll_id: u64) -> Result<(i128, i128, u32, u32), PredictXError> {
+        staking::get_pool_info(&env, poll_id)
     }
 }
 
@@ -265,7 +393,9 @@ mod test {
         let admin = Address::generate(&env);
         let oracle = Address::generate(&env);
         client.initialize(&admin, &oracle);
-        let err = client.try_initialize(&admin, &oracle).expect_err("should fail");
+        let err = client
+            .try_initialize(&admin, &oracle)
+            .expect_err("should fail");
         assert_eq!(err, Ok(PredictXError::AlreadyInitialized));
     }
 
@@ -297,7 +427,9 @@ mod test {
         assert_eq!(client.is_paused(), false);
         client.pause(&admin);
         assert_eq!(client.is_paused(), true);
-        let err = client.try_set_oracle(&oracle).expect_err("should be blocked");
+        let err = client
+            .try_set_oracle(&oracle)
+            .expect_err("should be blocked");
         assert_eq!(err, Ok(PredictXError::EmergencyWithdrawNotAllowed));
         client.unpause(&admin);
         assert_eq!(client.is_paused(), false);
@@ -315,7 +447,10 @@ mod test {
         let client = PredictionMarketClient::new(&env, &contract_id);
         client.initialize(&admin, &oracle_id);
         client.cancel_poll(&admin, &1_u64);
-        assert_eq!(oracle_client.get_poll_status(&1_u64), voting_oracle::PollStatus::Cancelled);
+        assert_eq!(
+            oracle_client.get_poll_status(&1_u64),
+            voting_oracle::PollStatus::Cancelled
+        );
     }
 
     #[test]
@@ -330,9 +465,18 @@ mod test {
         let client = PredictionMarketClient::new(&env, &contract_id);
         client.initialize(&admin, &oracle_id);
         let user = Address::generate(&env);
-        let stake = Stake { user: user.clone(), poll_id: 10, amount: 50, side: StakeSide::Yes, claimed: false, staked_at: env.ledger().timestamp() };
+        let stake = Stake {
+            user: user.clone(),
+            poll_id: 10,
+            amount: 50,
+            side: StakeSide::Yes,
+            claimed: false,
+            staked_at: env.ledger().timestamp(),
+        };
         env.as_contract(&contract_id, || {
-            env.storage().persistent().set(&DataKey::Stake(10, user.clone()), &stake);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Stake(10, user.clone()), &stake);
         });
         client.cancel_poll(&admin, &10_u64);
         let refunded = client.emergency_withdraw(&user, &10_u64);
@@ -353,9 +497,18 @@ mod test {
         let client = PredictionMarketClient::new(&env, &contract_id);
         client.initialize(&admin, &oracle_id);
         let user = Address::generate(&env);
-        let stake = Stake { user: user.clone(), poll_id: 5, amount: 25, side: StakeSide::No, claimed: false, staked_at: env.ledger().timestamp() };
+        let stake = Stake {
+            user: user.clone(),
+            poll_id: 5,
+            amount: 25,
+            side: StakeSide::No,
+            claimed: false,
+            staked_at: env.ledger().timestamp(),
+        };
         env.as_contract(&contract_id, || {
-            env.storage().persistent().set(&DataKey::Stake(5, user.clone()), &stake);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Stake(5, user.clone()), &stake);
         });
         env.ledger().set_timestamp(100 + EMERGENCY_TIMEOUT_SECS + 1);
         assert!(client.check_emergency_eligible(&5_u64));
@@ -377,13 +530,24 @@ mod test {
         let client = PredictionMarketClient::new(&env, &contract_id);
         client.initialize(&admin, &oracle_id);
         let user = Address::generate(&env);
-        let stake = Stake { user: user.clone(), poll_id: 2, amount: 30, side: StakeSide::Yes, claimed: false, staked_at: env.ledger().timestamp() };
+        let stake = Stake {
+            user: user.clone(),
+            poll_id: 2,
+            amount: 30,
+            side: StakeSide::Yes,
+            claimed: false,
+            staked_at: env.ledger().timestamp(),
+        };
         env.as_contract(&contract_id, || {
-            env.storage().persistent().set(&DataKey::Stake(2, user.clone()), &stake);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Stake(2, user.clone()), &stake);
         });
         env.ledger().set_timestamp(200 + EMERGENCY_TIMEOUT_SECS - 1);
         assert!(!client.check_emergency_eligible(&2_u64));
-        let err = client.try_emergency_withdraw(&user, &2_u64).expect_err("should reject");
+        let err = client
+            .try_emergency_withdraw(&user, &2_u64)
+            .expect_err("should reject");
         assert_eq!(err, Ok(PredictXError::EmergencyWithdrawNotAllowed));
     }
 
@@ -401,14 +565,25 @@ mod test {
         let client = PredictionMarketClient::new(&env, &contract_id);
         client.initialize(&admin, &oracle_id);
         let user = Address::generate(&env);
-        let stake = Stake { user: user.clone(), poll_id: 3, amount: 40, side: StakeSide::No, claimed: false, staked_at: env.ledger().timestamp() };
+        let stake = Stake {
+            user: user.clone(),
+            poll_id: 3,
+            amount: 40,
+            side: StakeSide::No,
+            claimed: false,
+            staked_at: env.ledger().timestamp(),
+        };
         env.as_contract(&contract_id, || {
-            env.storage().persistent().set(&DataKey::Stake(3, user.clone()), &stake);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Stake(3, user.clone()), &stake);
         });
         env.ledger().set_timestamp(300 + EMERGENCY_TIMEOUT_SECS + 1);
         let refunded = client.emergency_withdraw(&user, &3_u64);
         assert_eq!(refunded, 40);
-        let err = client.try_emergency_withdraw(&user, &3_u64).expect_err("double withdrawal should fail");
+        let err = client
+            .try_emergency_withdraw(&user, &3_u64)
+            .expect_err("double withdrawal should fail");
         assert_eq!(err, Ok(PredictXError::AlreadyClaimed));
     }
 }

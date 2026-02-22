@@ -1,6 +1,6 @@
 #![no_std]
 
-use predictx_shared::{PredictXError, PollStatus};
+use predictx_shared::{PollStatus, PredictXError};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 #[contract]
@@ -47,7 +47,11 @@ impl VotingOracle {
     ///
     /// This exists only to validate cross-contract invocation patterns during
     /// Phase 1 scaffolding.
-    pub fn set_poll_status(env: Env, poll_id: u64, status: PollStatus) -> Result<(), PredictXError> {
+    pub fn set_poll_status(
+        env: Env,
+        poll_id: u64,
+        status: PollStatus,
+    ) -> Result<(), PredictXError> {
         let admin = get_admin(&env)?;
         admin.require_auth();
 

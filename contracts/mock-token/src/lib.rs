@@ -12,4 +12,3 @@ impl MockToken {
 
 #[cfg(test)]
 extern crate std;
-
