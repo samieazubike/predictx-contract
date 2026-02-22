@@ -1,6 +1,7 @@
 #![no_std]
 
 mod matches;
+mod polls;
 
 use predictx_shared::{Match, PlatformStats, PredictXError, PollStatus, Stake};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec};
@@ -37,16 +38,20 @@ pub enum DataKey {
     // ── match management keys ─────────────────────────────────────────────────
     Initialized,
     NextMatchId,
+    NextPollId,
     Match(u64),
     MatchPolls(u64),
+    // ── poll management keys ────────────────────────────────────────────────────
+    Poll(u64),
+    PollsByStatus(PollStatus),
 }
 
-fn get_admin(env: &Env) -> Result<Address, PredictXError> {
+pub(crate) fn get_admin(env: &Env) -> Result<Address, PredictXError> {
     env.storage().instance().get(&DataKey::Admin)
         .ok_or(PredictXError::NotInitialized)
 }
 
-fn get_oracle(env: &Env) -> Result<Address, PredictXError> {
+pub(crate) fn get_oracle(env: &Env) -> Result<Address, PredictXError> {
     env.storage().instance().get(&DataKey::VotingOracle)
         .ok_or(PredictXError::NotInitialized)
 }
@@ -62,7 +67,7 @@ fn ensure_not_paused(env: &Env) -> Result<(), PredictXError> {
     Ok(())
 }
 
-fn get_platform_stats(env: &Env) -> PlatformStats {
+pub(crate) fn get_platform_stats(env: &Env) -> PlatformStats {
     env.storage().instance().get(&DataKey::PlatformStats)
         .unwrap_or(PlatformStats {
             total_value_locked: 0,
@@ -73,7 +78,7 @@ fn get_platform_stats(env: &Env) -> PlatformStats {
         })
 }
 
-fn set_platform_stats(env: &Env, stats: &PlatformStats) {
+pub(crate) fn set_platform_stats(env: &Env, stats: &PlatformStats) {
     env.storage().instance().set(&DataKey::PlatformStats, stats);
 }
 
@@ -231,6 +236,59 @@ impl PredictionMarket {
 
     pub fn get_match_count(env: Env) -> u64 {
         matches::get_match_count(&env)
+    }
+
+    // ── Poll management ───────────────────────────────────────────────────────
+
+    pub fn create_poll(
+        env: Env,
+        creator: Address,
+        match_id: u64,
+        question: String,
+        category: predictx_shared::PollCategory,
+        lock_time: u64,
+    ) -> Result<u64, PredictXError> {
+        polls::create_poll(&env, creator, match_id, question, category, lock_time)
+    }
+
+    pub fn check_and_lock_poll(env: Env, poll_id: u64) -> Result<PollStatus, PredictXError> {
+        polls::check_and_lock_poll(&env, poll_id)
+    }
+
+    pub fn set_poll_voting(env: Env, oracle: Address, poll_id: u64) -> Result<(), PredictXError> {
+        polls::set_poll_voting(&env, oracle, poll_id)
+    }
+
+    pub fn set_poll_resolved(env: Env, oracle: Address, poll_id: u64, outcome: bool) -> Result<(), PredictXError> {
+        polls::set_poll_resolved(&env, oracle, poll_id, outcome)
+    }
+
+    pub fn set_poll_admin_review(env: Env, oracle: Address, poll_id: u64) -> Result<(), PredictXError> {
+        polls::set_poll_admin_review(&env, oracle, poll_id)
+    }
+
+    pub fn set_poll_disputed(env: Env, oracle: Address, poll_id: u64) -> Result<(), PredictXError> {
+        polls::set_poll_disputed(&env, oracle, poll_id)
+    }
+
+    pub fn set_poll_cancelled(env: Env, admin: Address, poll_id: u64) -> Result<(), PredictXError> {
+        polls::set_poll_cancelled(&env, admin, poll_id)
+    }
+
+    pub fn get_poll(env: Env, poll_id: u64) -> Result<predictx_shared::Poll, PredictXError> {
+        polls::get_poll_view(&env, poll_id)
+    }
+
+    pub fn get_polls_by_match(env: Env, match_id: u64) -> Result<Vec<predictx_shared::Poll>, PredictXError> {
+        polls::get_polls_by_match_view(&env, match_id)
+    }
+
+    pub fn get_polls_by_status(env: Env, status: PollStatus) -> Vec<u64> {
+        polls::get_polls_by_status_view(&env, status)
+    }
+
+    pub fn get_poll_count(env: Env) -> u64 {
+        polls::get_poll_count_view(&env)
     }
 }
 
