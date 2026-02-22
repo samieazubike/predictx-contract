@@ -1,15 +1,18 @@
-use soroban_sdk::{token, Address, Env, Symbol, Vec};
-use predictx_shared::{Poll, PollStatus, Stake, StakeSide, PredictXError};
 use crate::DataKey;
+use predictx_shared::{Poll, PollStatus, PredictXError, Stake, StakeSide};
+use soroban_sdk::{token, Address, Env, Symbol, Vec};
 
 const MIN_STAKE_AMOUNT: i128 = 10;
-const PLATFORM_FEE_BPS: i128 = 500;   // 5%
+const PLATFORM_FEE_BPS: i128 = 500; // 5%
 const BPS_DENOMINATOR: i128 = 10_000;
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 fn get_token(env: &Env) -> Address {
-    env.storage().instance().get(&DataKey::TokenAddress).unwrap()
+    env.storage()
+        .instance()
+        .get(&DataKey::TokenAddress)
+        .unwrap()
 }
 
 fn get_poll(env: &Env, poll_id: u64) -> Result<Poll, PredictXError> {
@@ -20,7 +23,9 @@ fn get_poll(env: &Env, poll_id: u64) -> Result<Poll, PredictXError> {
 }
 
 fn set_poll(env: &Env, poll: &Poll) {
-    env.storage().persistent().set(&DataKey::Poll(poll.poll_id), poll);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Poll(poll.poll_id), poll);
 }
 
 // ── Staking ───────────────────────────────────────────────────────────────────
@@ -154,17 +159,19 @@ pub fn calculate_potential_winnings(
 
     let side_pool = match side {
         StakeSide::Yes => poll.yes_pool,
-        StakeSide::No  => poll.no_pool,
+        StakeSide::No => poll.no_pool,
     };
 
     let total_pool_after = poll.yes_pool + poll.no_pool + amount;
-    let side_pool_after  = side_pool + amount;
+    let side_pool_after = side_pool + amount;
 
-    if side_pool_after == 0 { return Ok(0); }
+    if side_pool_after == 0 {
+        return Ok(0);
+    }
 
     // Proportional share of total pool, then apply (1 - fee) using BPS
     let gross = (amount * total_pool_after) / side_pool_after;
-    let net   = gross * (BPS_DENOMINATOR - PLATFORM_FEE_BPS) / BPS_DENOMINATOR;
+    let net = gross * (BPS_DENOMINATOR - PLATFORM_FEE_BPS) / BPS_DENOMINATOR;
 
     Ok(net)
 }
@@ -180,13 +187,13 @@ pub fn get_pool_info(env: &Env, poll_id: u64) -> Result<(i128, i128, u32, u32), 
 mod test {
     extern crate std;
 
+    use crate::{DataKey, PredictionMarket, PredictionMarketClient};
+    use predictx_shared::{Poll, PollCategory, PollStatus, PredictXError, StakeSide};
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
-        token::{Client as TokenClient, StellarAssetClient},
+        token::StellarAssetClient,
         Address, Env,
     };
-    use predictx_shared::{Poll, PollCategory, PollStatus, StakeSide, PredictXError};
-    use crate::{PredictionMarket, PredictionMarketClient, DataKey};
 
     const LOCK_TIME: u64 = 2_000_000;
 
@@ -196,7 +203,9 @@ mod test {
 
         // Deploy a real Stellar asset contract for token transfers
         let token_admin = Address::generate(&env);
-        let token_addr = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
+        let token_addr = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
 
         // Register prediction-market
         let cid = env.register(PredictionMarket, ());
@@ -212,7 +221,7 @@ mod test {
         (env, admin, client, token_addr)
     }
 
-    fn fund_user(env: &Env, token_addr: &Address, token_admin: &Address, user: &Address, amount: i128) {
+    fn fund_user(env: &Env, token_addr: &Address, _token_admin: &Address, user: &Address, amount: i128) {
         StellarAssetClient::new(env, token_addr).mint(user, &amount);
     }
 
@@ -235,7 +244,9 @@ mod test {
             created_at: env.ledger().timestamp(),
         };
         env.as_contract(&cid, || {
-            env.storage().persistent().set(&DataKey::Poll(poll_id), &poll);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Poll(poll_id), &poll);
         });
     }
 
@@ -322,7 +333,10 @@ mod test {
         let (env, admin, client, _) = setup();
         make_poll(&env, &client, &admin, 1);
         let user = Address::generate(&env);
-        let err = client.try_stake(&user, &1u64, &0, &StakeSide::Yes).unwrap_err().unwrap();
+        let err = client
+            .try_stake(&user, &1u64, &0, &StakeSide::Yes)
+            .unwrap_err()
+            .unwrap();
         assert_eq!(err, PredictXError::StakeAmountZero);
     }
 
@@ -331,7 +345,10 @@ mod test {
         let (env, admin, client, _) = setup();
         make_poll(&env, &client, &admin, 1);
         let user = Address::generate(&env);
-        let err = client.try_stake(&user, &1u64, &5, &StakeSide::Yes).unwrap_err().unwrap();
+        let err = client
+            .try_stake(&user, &1u64, &5, &StakeSide::Yes)
+            .unwrap_err()
+            .unwrap();
         assert_eq!(err, PredictXError::StakeAmountZero);
     }
 
@@ -343,7 +360,10 @@ mod test {
         env.ledger().with_mut(|l| l.timestamp = LOCK_TIME + 1);
         let user = Address::generate(&env);
         fund_user(&env, &token_addr, &token_admin, &user, 1_000);
-        let err = client.try_stake(&user, &1u64, &100, &StakeSide::Yes).unwrap_err().unwrap();
+        let err = client
+            .try_stake(&user, &1u64, &100, &StakeSide::Yes)
+            .unwrap_err()
+            .unwrap();
         assert_eq!(err, PredictXError::PollLocked);
     }
 
@@ -355,13 +375,20 @@ mod test {
         // Create a resolved poll
         let cid = client.address.clone();
         let poll = Poll {
-            poll_id: 1, match_id: 1, creator: admin.clone(),
+            poll_id: 1,
+            match_id: 1,
+            creator: admin.clone(),
             question: soroban_sdk::String::from_str(&env, "Q?"),
             category: PollCategory::Other,
-            lock_time: LOCK_TIME, yes_pool: 0, no_pool: 0,
-            yes_count: 0, no_count: 0,
+            lock_time: LOCK_TIME,
+            yes_pool: 0,
+            no_pool: 0,
+            yes_count: 0,
+            no_count: 0,
             status: PollStatus::Resolved,
-            outcome: Some(true), resolution_time: 0, created_at: 0,
+            outcome: Some(true),
+            resolution_time: 0,
+            created_at: 0,
         };
         env.as_contract(&cid, || {
             env.storage().persistent().set(&DataKey::Poll(1u64), &poll);
@@ -369,7 +396,10 @@ mod test {
 
         let user = Address::generate(&env);
         fund_user(&env, &token_addr, &token_admin, &user, 1_000);
-        let err = client.try_stake(&user, &1u64, &100, &StakeSide::Yes).unwrap_err().unwrap();
+        let err = client
+            .try_stake(&user, &1u64, &100, &StakeSide::Yes)
+            .unwrap_err()
+            .unwrap();
         assert_eq!(err, PredictXError::PollNotActive);
     }
 
@@ -381,7 +411,10 @@ mod test {
         let user = Address::generate(&env);
         fund_user(&env, &token_addr, &token_admin, &user, 2_000);
         client.stake(&user, &1u64, &100, &StakeSide::Yes);
-        let err = client.try_stake(&user, &1u64, &100, &StakeSide::No).unwrap_err().unwrap();
+        let err = client
+            .try_stake(&user, &1u64, &100, &StakeSide::No)
+            .unwrap_err()
+            .unwrap();
         assert_eq!(err, PredictXError::AlreadyStaked);
     }
 
@@ -389,7 +422,10 @@ mod test {
     fn test_stake_nonexistent_poll() {
         let (env, _, client, _) = setup();
         let user = Address::generate(&env);
-        let err = client.try_stake(&user, &999u64, &100, &StakeSide::Yes).unwrap_err().unwrap();
+        let err = client
+            .try_stake(&user, &999u64, &100, &StakeSide::Yes)
+            .unwrap_err()
+            .unwrap();
         assert_eq!(err, PredictXError::PollNotFound);
     }
 

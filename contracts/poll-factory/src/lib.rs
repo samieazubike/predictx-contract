@@ -1,6 +1,6 @@
 #![no_std]
 
-use predictx_shared::{PredictXError, Poll, PollCategory, PollStatus};
+use predictx_shared::{Poll, PollCategory, PollStatus, PredictXError};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
 
 #[contract]
@@ -22,12 +22,17 @@ fn get_admin(env: &Env) -> Result<Address, PredictXError> {
 }
 
 fn next_poll_id(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::NextPollId).unwrap_or(1)
+    env.storage()
+        .instance()
+        .get(&DataKey::NextPollId)
+        .unwrap_or(1)
 }
 
 fn bump_poll_id(env: &Env) -> u64 {
     let id = next_poll_id(env);
-    env.storage().instance().set(&DataKey::NextPollId, &(id + 1));
+    env.storage()
+        .instance()
+        .set(&DataKey::NextPollId, &(id + 1));
     id
 }
 
@@ -62,19 +67,19 @@ impl PollFactory {
         let poll_id = bump_poll_id(&env);
         let poll = Poll {
             poll_id,
-    			match_id: 0,                          // polls not linked to matches yet
-    			creator: creator.clone(),
-				question,
-				category: PollCategory::Other,
-				lock_time: lock_timestamp,
-				yes_pool: 0,
-				no_pool: 0,
-				yes_count: 0,
-				no_count: 0,
-				status: PollStatus::Active,
-				outcome: None,
-				resolution_time: 0,
-				created_at: env.ledger().timestamp(),
+            match_id: 0, // polls not linked to matches yet
+            creator: creator.clone(),
+            question,
+            category: PollCategory::Other,
+            lock_time: lock_timestamp,
+            yes_pool: 0,
+            no_pool: 0,
+            yes_count: 0,
+            no_count: 0,
+            status: PollStatus::Active,
+            outcome: None,
+            resolution_time: 0,
+            created_at: env.ledger().timestamp(),
         };
 
         env.storage()
