@@ -70,4 +70,6 @@ pub enum PredictXError {
     TransferFailed = 32,
     /// Contract is paused.
     ContractPaused = 33,
+    /// Stake amount is below the minimum required.
+    StakeBelowMinimum = 34,
 }
