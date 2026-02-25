@@ -181,7 +181,8 @@ mod test {
         let admin = Address::generate(&env);
         let oracle = Address::generate(&env);   // dummy — not used by match functions
         let token = Address::generate(&env);    // dummy — not used by match functions
-        client.initialize(&admin, &oracle, &token);
+        let treasury = Address::generate(&env); // dummy — not used by match functions
+        client.initialize(&admin, &oracle, &token, &treasury, &500_u32);
         env.ledger().with_mut(|l| l.timestamp = 1_000_000);
         (env, admin, client)
     }
