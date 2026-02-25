@@ -172,7 +172,7 @@ mod test {
     use predictx_shared::PredictXError;
     use crate::{PredictionMarket, PredictionMarketClient};
 
-    // setup now passes a dummy oracle address to match the real initialize signature
+    // setup now passes a dummy oracle address and token address to match the real initialize signature
     fn setup() -> (Env, Address, PredictionMarketClient<'static>) {
         let env = Env::default();
         env.mock_all_auths();
@@ -180,7 +180,8 @@ mod test {
         let client = PredictionMarketClient::new(&env, &cid);
         let admin = Address::generate(&env);
         let oracle = Address::generate(&env);   // dummy — not used by match functions
-        client.initialize(&admin, &oracle);
+        let token = Address::generate(&env);    // dummy — not used by match functions
+        client.initialize(&admin, &oracle, &token);
         env.ledger().with_mut(|l| l.timestamp = 1_000_000);
         (env, admin, client)
     }
