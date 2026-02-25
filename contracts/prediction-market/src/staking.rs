@@ -1,9 +1,9 @@
-use soroban_sdk::{Address, Env, Symbol, Vec, token};
+use soroban_sdk::{Address, Env, Symbol, Vec};
 use predictx_shared::{
     Poll, PollStatus, Stake, StakeSide, PredictXError,
-    MIN_STAKE_AMOUNT, PLATFORM_FEE_BPS, BPS_DENOMINATOR,
+    MIN_STAKE_AMOUNT, BPS_DENOMINATOR,
 };
-use crate::{DataKey, PoolInfo, get_platform_stats, set_platform_stats, ensure_not_paused};
+use crate::{DataKey, PoolInfo, get_platform_stats, set_platform_stats, ensure_not_paused, token_utils};
 
 // ── Stake placement ───────────────────────────────────────────────────────────
 
@@ -56,13 +56,7 @@ pub fn stake(
 
     // ── Interactions ──────────────────────────────────────────────────────────
 
-    let token_addr: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::TokenAddress)
-        .ok_or(PredictXError::NotInitialized)?;
-    let token_client = token::Client::new(env, &token_addr);
-    token_client.transfer(&staker, &env.current_contract_address(), &amount);
+    token_utils::transfer_to_contract(env, &staker, amount)?;
 
     // ── Effects ───────────────────────────────────────────────────────────────
 
@@ -183,7 +177,8 @@ pub fn calculate_potential_winnings(
     let pool_on_side_after = pool_on_side + amount;
     let total_pool_after = poll.yes_pool + poll.no_pool + amount;
 
-    let fee_factor = (BPS_DENOMINATOR - PLATFORM_FEE_BPS) as i128;
+    let fee_bps = token_utils::get_platform_fee_bps(env);
+    let fee_factor = (BPS_DENOMINATOR - fee_bps) as i128;
     let bps = BPS_DENOMINATOR as i128;
 
     // winnings = (amount / pool_on_side_after) * total_pool_after * (1 - fee%)
@@ -252,7 +247,8 @@ mod test {
         // Register prediction market and initialize
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
-        client.initialize(&admin, &oracle_id, &token_addr);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &oracle_id, &token_addr, &treasury, &500_u32);
 
         // Set ledger timestamp
         env.ledger().with_mut(|l| l.timestamp = 1_000_000);
@@ -648,5 +644,84 @@ mod test {
             .try_calculate_potential_winnings(&poll_id, &StakeSide::Yes, &0_i128)
             .expect_err("should reject zero");
         assert_eq!(err, Ok(PredictXError::StakeAmountZero));
+    }
+
+    // ══ Token integration tests ═══════════════════════════════════════════════
+
+    #[test]
+    fn get_contract_balance_returns_zero_initially() {
+        let s = setup();
+        assert_eq!(s.client.get_contract_balance(), 0);
+    }
+
+    #[test]
+    fn get_contract_balance_reflects_staked_tokens() {
+        let s = setup();
+        let poll_id = create_test_poll(&s, 2_000_000);
+        let user = Address::generate(&s.env);
+        let amount: i128 = 100_000_000;
+        mint_tokens(&s, &user, amount);
+
+        s.client.stake(&user, &poll_id, &amount, &StakeSide::Yes);
+
+        assert_eq!(s.client.get_contract_balance(), amount);
+    }
+
+    #[test]
+    fn get_token_address_returns_stored_address() {
+        let s = setup();
+        assert_eq!(s.client.get_token_address(), s.token_addr);
+    }
+
+    #[test]
+    fn get_treasury_address_returns_stored_address() {
+        let s = setup();
+        let treasury: Address = s.env.as_contract(&s.contract_id, || {
+            s.env.storage().instance().get(&DataKey::TreasuryAddress).unwrap()
+        });
+        assert_eq!(s.client.get_treasury_address(), treasury);
+    }
+
+    #[test]
+    fn get_platform_fee_bps_returns_configured_value() {
+        let s = setup();
+        assert_eq!(s.client.get_platform_fee_bps(), 500);
+    }
+
+    #[test]
+    fn transfer_to_contract_moves_exact_amount() {
+        let s = setup();
+        let poll_id = create_test_poll(&s, 2_000_000);
+        let user = Address::generate(&s.env);
+        let deposit: i128 = 200_000_000;
+        mint_tokens(&s, &user, deposit);
+
+        let stake_amount: i128 = 150_000_000;
+        s.client.stake(&user, &poll_id, &stake_amount, &StakeSide::Yes);
+
+        // User should have deposit - stake_amount left
+        assert_eq!(token_balance(&s, &user), deposit - stake_amount);
+        // Contract should hold exactly stake_amount
+        assert_eq!(token_balance(&s, &s.contract_id), stake_amount);
+    }
+
+    #[test]
+    fn multiple_stakes_accumulate_contract_balance() {
+        let s = setup();
+        let poll_id = create_test_poll(&s, 2_000_000);
+        let base: i128 = 50_000_000;
+        let mut total: i128 = 0;
+
+        for i in 1..=4_i128 {
+            let u = Address::generate(&s.env);
+            let amt = base * i;
+            mint_tokens(&s, &u, amt);
+            let side = if i % 2 == 0 { StakeSide::No } else { StakeSide::Yes };
+            s.client.stake(&u, &poll_id, &amt, &side);
+            total += amt;
+        }
+
+        assert_eq!(s.client.get_contract_balance(), total);
+        assert_eq!(token_balance(&s, &s.contract_id), total);
     }
 }

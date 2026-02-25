@@ -2,6 +2,7 @@
 
 mod matches;
 mod staking;
+pub(crate) mod token_utils;
 
 use predictx_shared::{
     Match, PlatformStats, Poll, PollCategory, PollStatus, PredictXError, Stake, StakeSide,
@@ -36,6 +37,8 @@ pub enum DataKey {
     VotingOracle,
     Paused,
     TokenAddress,
+    TreasuryAddress,
+    PlatformFeeBps,
     Stake(u64, Address),
     EmergencyClaimed(u64, Address),
     PlatformStats,
@@ -121,6 +124,8 @@ impl PredictionMarket {
         admin: Address,
         voting_oracle: Address,
         token_address: Address,
+        treasury_address: Address,
+        platform_fee_bps: u32,
     ) -> Result<(), PredictXError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(PredictXError::AlreadyInitialized);
@@ -129,6 +134,8 @@ impl PredictionMarket {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::VotingOracle, &voting_oracle);
         env.storage().instance().set(&DataKey::TokenAddress, &token_address);
+        env.storage().instance().set(&DataKey::TreasuryAddress, &treasury_address);
+        env.storage().instance().set(&DataKey::PlatformFeeBps, &platform_fee_bps);
         env.storage().instance().set(&DataKey::NextMatchId, &1u64);
         env.storage().instance().set(&DataKey::NextPollId, &1u64);
         env.storage().instance().set(&DataKey::Initialized, &true);
@@ -217,6 +224,10 @@ impl PredictionMarket {
         if !eligible { return Err(PredictXError::EmergencyWithdrawNotAllowed); }
         let stake = load_stake(&env, poll_id, &user).ok_or(PredictXError::NotStaker)?;
         set_emergency_claimed(&env, poll_id, &user);
+
+        // Transfer tokens back to user
+        token_utils::transfer_from_contract(&env, &user, stake.amount)?;
+
         let mut stats = get_platform_stats(&env);
         stats.total_value_locked -= stake.amount;
         set_platform_stats(&env, &stats);
@@ -353,6 +364,24 @@ impl PredictionMarket {
         get_platform_stats(&env)
     }
 
+    // ── Token view functions ──────────────────────────────────────────────────
+
+    pub fn get_token_address(env: Env) -> Result<Address, PredictXError> {
+        token_utils::get_token_address(&env)
+    }
+
+    pub fn get_treasury_address(env: Env) -> Result<Address, PredictXError> {
+        token_utils::get_treasury_address(&env)
+    }
+
+    pub fn get_platform_fee_bps(env: Env) -> u32 {
+        token_utils::get_platform_fee_bps(&env)
+    }
+
+    pub fn get_contract_balance(env: Env) -> Result<i128, PredictXError> {
+        token_utils::get_balance(&env)
+    }
+
     // ── Match management ──────────────────────────────────────────────────────
 
     pub fn create_match(
@@ -398,6 +427,10 @@ mod test {
     use super::*;
     use predictx_shared::StakeSide;
     use soroban_sdk::testutils::{Address as _, Ledger};
+    use soroban_sdk::token;
+
+    /// Default platform fee BPS for tests (5%).
+    const TEST_FEE_BPS: u32 = 500;
 
     #[test]
     fn initialize_sets_admin_and_oracle() {
@@ -408,9 +441,26 @@ mod test {
         let admin = Address::generate(&env);
         let oracle = Address::generate(&env);
         let token = Address::generate(&env);
-        client.initialize(&admin, &oracle, &token);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &oracle, &token, &treasury, &TEST_FEE_BPS);
         assert_eq!(client.admin(), admin);
         assert_eq!(client.oracle(), oracle);
+    }
+
+    #[test]
+    fn initialize_stores_token_and_treasury() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let tok = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &oracle, &tok, &treasury, &TEST_FEE_BPS);
+        assert_eq!(client.get_token_address(), tok);
+        assert_eq!(client.get_treasury_address(), treasury);
+        assert_eq!(client.get_platform_fee_bps(), TEST_FEE_BPS);
     }
 
     #[test]
@@ -422,8 +472,9 @@ mod test {
         let admin = Address::generate(&env);
         let oracle = Address::generate(&env);
         let token = Address::generate(&env);
-        client.initialize(&admin, &oracle, &token);
-        let err = client.try_initialize(&admin, &oracle, &token).expect_err("should fail");
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &oracle, &token, &treasury, &TEST_FEE_BPS);
+        let err = client.try_initialize(&admin, &oracle, &token, &treasury, &TEST_FEE_BPS).expect_err("should fail");
         assert_eq!(err, Ok(PredictXError::AlreadyInitialized));
     }
 
@@ -438,8 +489,9 @@ mod test {
         oracle_client.set_poll_status(&7_u64, &voting_oracle::PollStatus::Resolved);
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
-        let token = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &token);
+        let tok = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &oracle_id, &tok, &treasury, &TEST_FEE_BPS);
         let status = client.oracle_poll_status(&7_u64);
         assert_eq!(status, PollStatus::Resolved);
     }
@@ -452,8 +504,9 @@ mod test {
         let client = PredictionMarketClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
         let oracle = Address::generate(&env);
-        let token = Address::generate(&env);
-        client.initialize(&admin, &oracle, &token);
+        let tok = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &oracle, &tok, &treasury, &TEST_FEE_BPS);
         assert_eq!(client.is_paused(), false);
         client.pause(&admin);
         assert_eq!(client.is_paused(), true);
@@ -473,73 +526,103 @@ mod test {
         oracle_client.initialize(&admin);
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
-        let token = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &token);
+        let tok = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &oracle_id, &tok, &treasury, &TEST_FEE_BPS);
         client.cancel_poll(&admin, &1_u64);
         assert_eq!(oracle_client.get_poll_status(&1_u64), voting_oracle::PollStatus::Cancelled);
     }
 
-    #[test]
-    fn emergency_withdraw_on_cancelled_poll_refunds_stake() {
+    // Helper to set up a real-token environment for emergency withdrawal tests
+    fn setup_emergency_env() -> (Env, Address, Address, Address, PredictionMarketClient<'static>) {
         let env = Env::default();
         env.mock_all_auths();
         let admin = Address::generate(&env);
+
         let oracle_id = env.register(voting_oracle::WASM, ());
         let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
         oracle_client.initialize(&admin);
+
+        // Real token for transfers
+        let token_admin = Address::generate(&env);
+        let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let token_addr = token_contract.address();
+        let treasury = Address::generate(&env);
+
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
-        let token = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &token);
+        client.initialize(&admin, &oracle_id, &token_addr, &treasury, &TEST_FEE_BPS);
+
+        (env, admin, oracle_id, contract_id, client)
+    }
+
+    /// Mint tokens to an address using the real SAC
+    fn mint_to(env: &Env, token_addr: &Address, to: &Address, amount: i128) {
+        let sac = token::StellarAssetClient::new(env, token_addr);
+        sac.mint(to, &amount);
+    }
+
+    #[test]
+    fn emergency_withdraw_on_cancelled_poll_refunds_stake() {
+        let (env, admin, oracle_id, contract_id, client) = setup_emergency_env();
+        let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
+        let token_addr: Address = env.as_contract(&contract_id, || {
+            env.storage().instance().get(&DataKey::TokenAddress).unwrap()
+        });
+
         let user = Address::generate(&env);
-        let stake = Stake { user: user.clone(), poll_id: 10, amount: 50, side: StakeSide::Yes, claimed: false, staked_at: env.ledger().timestamp() };
+        let amount: i128 = 50;
+
+        // Fund the contract so it can transfer back
+        mint_to(&env, &token_addr, &contract_id, amount);
+
+        let stake = Stake { user: user.clone(), poll_id: 10, amount, side: StakeSide::Yes, claimed: false, staked_at: env.ledger().timestamp() };
         env.as_contract(&contract_id, || {
             env.storage().persistent().set(&DataKey::Stake(10, user.clone()), &stake);
         });
         client.cancel_poll(&admin, &10_u64);
         let refunded = client.emergency_withdraw(&user, &10_u64);
-        assert_eq!(refunded, 50);
+        assert_eq!(refunded, amount);
+
+        // Verify token was transferred
+        let tok = token::Client::new(&env, &token_addr);
+        assert_eq!(tok.balance(&user), amount);
+        assert_eq!(tok.balance(&contract_id), 0);
     }
 
     #[test]
     fn emergency_withdraw_after_dispute_timeout() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = Address::generate(&env);
-        let oracle_id = env.register(voting_oracle::WASM, ());
+        let (env, _admin, oracle_id, contract_id, client) = setup_emergency_env();
         let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
-        oracle_client.initialize(&admin);
+        let token_addr: Address = env.as_contract(&contract_id, || {
+            env.storage().instance().get(&DataKey::TokenAddress).unwrap()
+        });
+
         env.ledger().set_timestamp(100);
         oracle_client.set_poll_status(&5_u64, &voting_oracle::PollStatus::Disputed);
-        let contract_id = env.register(PredictionMarket, ());
-        let client = PredictionMarketClient::new(&env, &contract_id);
-        let token = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &token);
+
         let user = Address::generate(&env);
-        let stake = Stake { user: user.clone(), poll_id: 5, amount: 25, side: StakeSide::No, claimed: false, staked_at: env.ledger().timestamp() };
+        let amount: i128 = 25;
+        mint_to(&env, &token_addr, &contract_id, amount);
+
+        let stake = Stake { user: user.clone(), poll_id: 5, amount, side: StakeSide::No, claimed: false, staked_at: env.ledger().timestamp() };
         env.as_contract(&contract_id, || {
             env.storage().persistent().set(&DataKey::Stake(5, user.clone()), &stake);
         });
         env.ledger().set_timestamp(100 + EMERGENCY_TIMEOUT_SECS + 1);
         assert!(client.check_emergency_eligible(&5_u64));
         let refunded = client.emergency_withdraw(&user, &5_u64);
-        assert_eq!(refunded, 25);
+        assert_eq!(refunded, amount);
     }
 
     #[test]
     fn emergency_withdraw_rejected_before_timeout() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = Address::generate(&env);
-        let oracle_id = env.register(voting_oracle::WASM, ());
+        let (env, _admin, oracle_id, contract_id, client) = setup_emergency_env();
         let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
-        oracle_client.initialize(&admin);
+
         env.ledger().set_timestamp(200);
         oracle_client.set_poll_status(&2_u64, &voting_oracle::PollStatus::Locked);
-        let contract_id = env.register(PredictionMarket, ());
-        let client = PredictionMarketClient::new(&env, &contract_id);
-        let token = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &token);
+
         let user = Address::generate(&env);
         let stake = Stake { user: user.clone(), poll_id: 2, amount: 30, side: StakeSide::Yes, claimed: false, staked_at: env.ledger().timestamp() };
         env.as_contract(&contract_id, || {
@@ -553,26 +636,26 @@ mod test {
 
     #[test]
     fn emergency_withdraw_prevents_double_withdrawal() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = Address::generate(&env);
-        let oracle_id = env.register(voting_oracle::WASM, ());
+        let (env, _admin, oracle_id, contract_id, client) = setup_emergency_env();
         let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
-        oracle_client.initialize(&admin);
+        let token_addr: Address = env.as_contract(&contract_id, || {
+            env.storage().instance().get(&DataKey::TokenAddress).unwrap()
+        });
+
         env.ledger().set_timestamp(300);
         oracle_client.set_poll_status(&3_u64, &voting_oracle::PollStatus::Disputed);
-        let contract_id = env.register(PredictionMarket, ());
-        let client = PredictionMarketClient::new(&env, &contract_id);
-        let token = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &token);
+
         let user = Address::generate(&env);
-        let stake = Stake { user: user.clone(), poll_id: 3, amount: 40, side: StakeSide::No, claimed: false, staked_at: env.ledger().timestamp() };
+        let amount: i128 = 40;
+        mint_to(&env, &token_addr, &contract_id, amount);
+
+        let stake = Stake { user: user.clone(), poll_id: 3, amount, side: StakeSide::No, claimed: false, staked_at: env.ledger().timestamp() };
         env.as_contract(&contract_id, || {
             env.storage().persistent().set(&DataKey::Stake(3, user.clone()), &stake);
         });
         env.ledger().set_timestamp(300 + EMERGENCY_TIMEOUT_SECS + 1);
         let refunded = client.emergency_withdraw(&user, &3_u64);
-        assert_eq!(refunded, 40);
+        assert_eq!(refunded, amount);
         let err = client.try_emergency_withdraw(&user, &3_u64).expect_err("double withdrawal should fail");
         assert_eq!(err, Ok(PredictXError::AlreadyClaimed));
     }
