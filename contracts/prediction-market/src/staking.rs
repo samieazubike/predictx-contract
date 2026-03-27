@@ -237,7 +237,8 @@ mod test {
         // Register voting oracle
         let oracle_id = env.register(crate::voting_oracle::WASM, ());
         let oracle_client = crate::voting_oracle::Client::new(&env, &oracle_id);
-        oracle_client.initialize(&admin);
+        let market_address = Address::generate(&env); // Will be set later with set_oracle_address
+        oracle_client.initialize(&admin, &market_address, &7200u64, &8500u32, &6000u32, &86400u64, &10000000i128);
 
         // Register a Stellar-asset token for staking
         let token_admin = Address::generate(&env);
@@ -248,7 +249,7 @@ mod test {
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
         let treasury = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &token_addr, &treasury, &500_u32);
+        client.initialize(&admin, &token_addr, &treasury, &500_u32, &100u32, &10000000i128);
 
         // Set ledger timestamp
         env.ledger().with_mut(|l| l.timestamp = 1_000_000);

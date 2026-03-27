@@ -72,4 +72,6 @@ pub enum PredictXError {
     ContractPaused = 33,
     /// Stake amount is below the minimum required.
     StakeBelowMinimum = 34,
+    /// Fee percentage is invalid or out of range.
+    InvalidFee = 35,
 }
