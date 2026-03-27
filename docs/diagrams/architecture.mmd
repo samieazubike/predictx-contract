@@ -1,0 +1,60 @@
+# PredictX Contract Architecture
+
+```mermaid
+graph TB
+    subgraph "User Interfaces"
+        Frontend["Frontend Application"]
+        CLI["Stellar CLI"]
+    end
+
+    subgraph "Smart Contracts"
+        PM["PredictionMarket"]
+        VO["VotingOracle"]
+        Treasury["Treasury"]
+        PF["PollFactory"]
+    end
+
+    subgraph "Soroban VM"
+        Token["XLM / Stellar Asset Token"]
+    end
+
+    Frontend -->|"invoke()"| PM
+    Frontend -->|"invoke()"| VO
+    Frontend -->|"invoke()"| PF
+    CLI -->|"invoke()"| PM
+    CLI -->|"invoke()"| Treasury
+
+    PM -->|"transfer()"| Token
+    PM -->|"set_poll_status()"| VO
+    PM -->|"get_poll_status()"| VO
+    PM -->|"deposit()"| Treasury
+```
+
+## Contract Deployment Order
+
+```mermaid
+sequenceDiagram
+    participant Admin
+    participant Token as Token (builtin)
+    participant Treasury
+    participant Oracle as VotingOracle
+    participant PM as PredictionMarket
+
+    Admin->>Token: Deploy Stellar Asset Contract
+    Admin->>Treasury: Deploy + initialize()
+    Admin->>Oracle: Deploy + initialize()
+    Admin->>PM: Deploy + initialize(admin, oracle, token, treasury, fee)
+```
+
+## State Dependencies
+
+```mermaid
+graph LR
+    PM["PredictionMarket"] --> VO["VotingOracle"]
+    PM --> Treasury
+    
+    VO -.->|"stores status"| PollStatus["Per-Poll Status"]
+    PM -.->|"stores"| Polls["Poll Data"]
+    PM -.->|"stores"| Stakes["Stake Records"]
+    PM -.->|"stores"| Matches["Match Data"]
+```

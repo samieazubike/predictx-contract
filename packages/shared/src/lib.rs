@@ -1,3 +1,18 @@
+//! # PredictX Shared Package
+//!
+//! Common types, error codes, and constants used by all PredictX contracts.
+//!
+//! ## Contents
+//!
+//! - [`types`] — Shared data structures (`Poll`, `Match`, `Stake`, `PollStatus`, etc.)
+//! - [`errors::PredictXError`] — Unified error enum for all contracts
+//! - [`constants`] — Platform-wide constants (fees, limits, thresholds)
+//!
+//! ## Contract Boundaries
+//!
+//! This package has no runtime dependency on Soroban SDK beyond `contracttype`
+//! derives. It is `no_std` and safe to use from all contract crates.
+
 #![no_std]
 
 pub mod constants;

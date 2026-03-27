@@ -1,0 +1,64 @@
+# Staking Flow Diagram
+
+```mermaid
+flowchart TD
+    Start[User initiates stake] --> Auth{require_auth<br/>staker}
+
+    Auth -->|pass| ValidatePoll{Validate Poll<br/>is Active?}
+
+    ValidatePoll -->|no| Error1["PollNotActive"]
+    ValidatePoll -->|yes| ValidateTime{Validate<br/>lock_time}
+
+    ValidateTime -->|current >= lock| Error2["PollLocked"]
+    ValidateTime -->|current < lock| ValidateStake{Validate<br/>no existing stake}
+
+    ValidateStake -->|already staked| Error3["AlreadyStaked"]
+    ValidateStake -->|not staked| ValidateAmount{Validate<br/>amount}
+
+    ValidateAmount -->|amount <= 0| Error4["StakeAmountZero"]
+    ValidateAmount -->|amount < MIN| Error5["StakeBelowMinimum"]
+    ValidateAmount -->|valid| ValidateBalance{Validate<br/>balance}
+
+    ValidateBalance -->|insufficient| Error6["InsufficientBalance"]
+    ValidateBalance -->|sufficient| Transfer[Transfer tokens<br/>user -> contract]
+
+    Transfer --> UpdatePools[Update yes_pool<br/>or no_pool]
+    UpdatePools --> IncrementCount[Increment yes_count<br/>or no_count]
+    IncrementCount --> StoreStake[Store Stake record<br/>with timestamp]
+    StoreStake --> UpdateStats[Update PlatformStats<br/>total_value_locked]
+    UpdateStats --> EmitEvent[Emit StakePlaced<br/>event]
+    EmitEvent --> Success[Return Stake<br/>to user]
+
+    Error1:::error
+    Error2:::error
+    Error3:::error
+    Error4:::error
+    Error5:::error
+    Error6:::error
+
+    classDef error fill:#ff6b6b,color:#fff
+```
+
+## Token Flow During Stake
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Token as Token Contract
+    participant PM as PredictionMarket
+
+    Note over User: User has approved<br/>token spending
+
+    User->>PM: stake(staker, poll_id, amount, Yes)
+
+    PM->>Token: transfer_from(user, PM, amount)
+    Note over Token: Validates:<br/>- Allowance<br/>- Balance<br/>- Amount
+
+    Token-->>PM: success
+
+    PM->>PM: Update yes_pool += amount
+    PM->>PM: Update yes_count += 1
+    PM->>PM: Store Stake record
+
+    PM-->>User: Stake { amount, side, claimed: false }
+```

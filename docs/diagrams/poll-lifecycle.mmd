@@ -1,0 +1,57 @@
+# Poll Lifecycle State Machine
+
+> **Note:** This diagram shows the full lifecycle as designed in the specification. Phase 1 implements only status tracking via `VotingOracle.set_poll_status()` — automatic transitions, community voting, and dispute resolution are Phase 2.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Active: create_poll()
+
+    Active --> Locked: lock_time reached (automatic)
+    Active --> Cancelled: cancel_poll() by admin
+
+    Locked --> Voting: Phase 2 only (initiate_voting)
+    Locked --> Cancelled: cancel_poll() by admin
+
+    Voting --> Resolved: Phase 2 (>85% consensus)
+    Voting --> AdminReview: Phase 2 (60-85% consensus)
+    Voting --> Disputed: Phase 2 (<60% consensus)
+
+    AdminReview --> Resolved: Phase 2 (admin_verify)
+    AdminReview --> Disputed: Phase 2 (admin rejects)
+
+    Disputed --> Resolved: Phase 2 (multi-sig resolve)
+
+    Resolved --> Disputed: Phase 2 (initiate_dispute, within 24h)
+
+    Cancelled --> [*]: Emergency withdrawal
+    Resolved --> [*]: Claims processed
+```
+
+## Phase 1: What Actually Exists
+
+```mermaid
+stateDiagram-v2
+    [*] --> Active: create_poll()
+    Active --> Cancelled: cancel_poll() by admin
+```
+
+**Phase 1 Implementation:**
+- `PollStatus` enum has all states (Active, Locked, Voting, AdminReview, Disputed, Resolved, Cancelled)
+- `VotingOracle.set_poll_status()` lets admin set any status manually
+- No automatic transitions, no community voting, no consensus thresholds
+
+## Status Transition Rules (Full Specification)
+
+| From | To | Trigger | Authority |
+|------|-----|---------|-----------|
+| Active | Locked | `lock_time` reached | Automatic (by timestamp) |
+| Active | Cancelled | `cancel_poll()` | Admin |
+| Locked | Voting | `initiate_voting()` | Admin |
+| Locked | Cancelled | `cancel_poll()` | Admin |
+| Voting | Resolved | `>85%` consensus | Automatic |
+| Voting | AdminReview | `60-85%` consensus | Automatic |
+| Voting | Disputed | `<60%` consensus | Automatic |
+| AdminReview | Resolved | `admin_verify()` | Admin |
+| AdminReview | Disputed | admin rejects | Admin |
+| Disputed | Resolved | `multi_sig_resolve()` | 3 Admins |
+| Resolved | Disputed | `initiate_dispute()` | Any user |

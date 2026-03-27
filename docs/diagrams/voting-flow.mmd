@@ -1,0 +1,89 @@
+# Voting Resolution Flow
+
+> **⚠️ Phase 2 Content:** The voting mechanics described in this document are **not yet implemented**. This documents the planned Phase 2 voting system for reference.
+
+## Phase 1: What Actually Exists
+
+```mermaid
+sequenceDiagram
+    participant Admin
+    participant PM as PredictionMarket
+    participant Oracle as VotingOracle
+
+    Admin->>Oracle: set_poll_status(poll_id, Locked)
+    Note over Oracle: Stores status + timestamp
+
+    Admin->>Oracle: set_poll_status(poll_id, Resolved)
+    Note over Oracle: Status updated, timestamp recorded
+```
+
+**Phase 1 reality:**
+- `VotingOracle.set_poll_status()` lets admin manually set any poll status
+- No community voting, no consensus thresholds, no voter rewards
+- Emergency withdrawal checks use the `updated_at` timestamp (7-day timeout)
+
+## Planned Phase 2: Full Voting Flow
+
+```mermaid
+flowchart TD
+    Start[Match ends<br/>Voting begins] --> CheckVoters{For each voter:<br/>can_vote?}
+
+    CheckVoters -->|yes| RecordVote[Record vote<br/>yes/no/unclear]
+    CheckVoters -->|no| Skip[Skip voter]
+    CheckVoters -->|already voted| Skip
+
+    RecordVote --> TallyVotes[Update vote tally]
+
+    CheckVoters --> MoreVoters{More<br/>voters?}
+
+    MoreVoters -->|yes| CheckVoters
+    MoreVoters -->|no| CalculateConsensus[Calculate consensus<br/>yes / (yes + no)]
+
+    CalculateConsensus --> Consensus{consensus > 85%?}
+
+    Consensus -->|yes| AutoResolve[Auto-resolve<br/>outcome]
+    Consensus -->|no| CheckAdmin{60% <= consensus<br/><= 85%?}
+
+    CheckAdmin -->|yes| AdminReview[Send to<br/>Admin Review]
+    CheckAdmin -->|no| DisputeFlag[Flag as<br/>Disputed]
+
+    AutoResolve --> EmitResolved[Emit PollResolved<br/>with outcome]
+    AdminReview --> WaitAdmin[Wait for<br/>admin_verify()]
+    DisputeFlag --> WaitDispute[Wait for<br/>multi-sig resolve]
+
+    WaitAdmin --> AdminAction{admin_verify<br/>or reject?}
+
+    AdminAction -->|verify| EmitResolved
+    AdminAction -->|reject| DisputeFlag
+
+    WaitDispute --> MultiSig{Multi-sig<br/>approval?}
+
+    MultiSig -->|3 approvals| EmitResolved
+
+    EmitResolved --> ClaimsOpen[Claims open<br/>for winners]
+
+    ClaimsOpen --> End[Resolution complete]
+```
+
+## Consensus Calculation (Phase 2)
+
+```mermaid
+graph LR
+    A[Total YES votes] --> C{Yes %}
+    B[Total NO votes] --> C
+    
+    C -->|A / (A + B) * 100| Result
+    
+    Result -->|&gt; 85%| Auto["Auto-Resolve<br/>YES wins"]
+    Result -->|60-85%| Admin["Admin Review"]
+    Result -->|&lt; 60%| Disputed["Disputed"]
+```
+
+## Voter Eligibility
+
+| Condition | Can Vote? |
+|-----------|-----------|
+| Voted on this poll before | No |
+| Staked on this poll | No |
+| Voting window expired | No |
+| Poll not in Voting status | No |

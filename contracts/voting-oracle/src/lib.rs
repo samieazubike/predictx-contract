@@ -1,6 +1,31 @@
+//! # Voting Oracle Contract
+//!
+//! Manages the lifecycle and resolution status of prediction market polls.
+//!
+//! ## Purpose
+//!
+//! Acts as the authoritative source of truth for poll outcomes. PredictionMarket
+//! queries this contract to determine if a poll is `Active`, `Locked`, `Voting`,
+//! `Resolved`, etc., and whether emergency withdrawals are permissible.
+//!
+//! ## Poll Lifecycle
+//!
+//! ```text
+//! Active → Locked → Voting → Resolved
+//!                    ↘ AdminReview
+//!                    ↘ Disputed
+//!                    ↘ Cancelled
+//! ```
+//!
+//! ## Current Implementation
+//!
+//! Phase 1 scaffolding: poll status is set by admin via `set_poll_status`.
+//! Future phases will integrate community voting, dispute resolution, and
+//! multi-sig admin approvals.
+
 #![no_std]
 
-use predictx_shared::{PredictXError, PollStatus};
+use predictx_shared::{PollStatus, PredictXError};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 #[contract]
@@ -47,7 +72,11 @@ impl VotingOracle {
     ///
     /// This exists only to validate cross-contract invocation patterns during
     /// Phase 1 scaffolding.
-    pub fn set_poll_status(env: Env, poll_id: u64, status: PollStatus) -> Result<(), PredictXError> {
+    pub fn set_poll_status(
+        env: Env,
+        poll_id: u64,
+        status: PollStatus,
+    ) -> Result<(), PredictXError> {
         let admin = get_admin(&env)?;
         admin.require_auth();
 
