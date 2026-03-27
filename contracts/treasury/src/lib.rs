@@ -1,3 +1,18 @@
+//! # Treasury Contract
+//!
+//! Manages platform-wide token accounting and fee collection.
+//!
+//! ## Responsibilities
+//!
+//! - Track individual user balances deposited for platform use
+//! - Accumulate platform fees collected from stake winnings
+//! - Provide on-chain balance queries for all registered users
+//!
+//! ## Current Implementation
+//!
+//! Phase 1 scaffolding: in-memory balance tracking only. Real token transfers
+//! (via Stellar Asset Contract) are integrated in later phases.
+
 #![no_std]
 
 use predictx_shared::PredictXError;

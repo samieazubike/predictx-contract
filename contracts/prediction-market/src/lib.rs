@@ -14,6 +14,31 @@ mod voting_oracle {
     soroban_sdk::contractimport!(file = "wasm/voting_oracle.wasm");
 }
 
+//! # Prediction Market Contract
+//!
+//! Core contract for the PredictX football prediction market. Manages matches,
+//! polls, staking, and coordinates with the VotingOracle for outcome resolution.
+//!
+//! ## Contract Overview
+//!
+//! - **Matches**: Football matches created by admin (home/away teams, league, kickoff)
+//! - **Polls**: Prediction questions attached to matches (e.g., "Will Palmer score?")
+//! - **Stakes**: Users stake tokens on Yes/No sides of a poll before the lock time
+//! - **Oracle**: VotingOracle resolves poll outcomes; PredictionMarket handles stakes/payouts
+//!
+//! ## Key Interactions
+//!
+//! 1. Admin creates a `Match` via `create_match`
+//! 2. Any user creates a `Poll` on that match via `create_poll`
+//! 3. Users stake on Yes/No via `stake` before the poll's `lock_time`
+//! 4. After match ends, `VotingOracle` transitions poll through `Locked → Voting → Resolved`
+//! 5. Winning stakers claim via `claim` (implemented in `staking.rs`)
+//!
+//! ## Pause Mechanism
+//!
+//! Admin can `pause` the contract to halt all stake operations in emergencies.
+//! Emergency withdrawals allow users to retrieve stakes if the oracle stalls.
+
 fn map_oracle_poll_status(status: voting_oracle::PollStatus) -> PollStatus {
     match status {
         voting_oracle::PollStatus::Active      => PollStatus::Active,
