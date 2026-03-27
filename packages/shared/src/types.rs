@@ -174,3 +174,47 @@ pub struct UserStats {
     pub votes_cast: u32,
     pub voting_rewards_earned: i128,
 }
+
+/// Complete platform configuration for querying.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlatformConfig {
+    pub admin: Address,
+    pub token_address: Address,
+    pub treasury_address: Address,
+    pub platform_fee_bps: u32,
+    pub voter_reward_bps: u32,
+    pub voting_window_secs: u64,
+    pub consensus_threshold_bps: u32,
+    pub admin_review_threshold_bps: u32,
+    pub dispute_window_secs: u64,
+    pub dispute_fee: i128,
+    pub min_stake_amount: i128,
+    pub max_polls_per_match: u32,
+    pub version: u32,
+    pub is_paused: bool,
+}
+
+/// Configuration keys for updates.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConfigKey {
+    PlatformFeeBps,
+    VoterRewardBps,
+    VotingWindowSecs,
+    ConsensusThresholdBps,
+    AdminReviewThresholdBps,
+    DisputeWindowSecs,
+    DisputeFee,
+    MinStakeAmount,
+    MaxPollsPerMatch,
+}
+
+/// Configuration values for updates.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConfigValue {
+    U32Value(u32),
+    U64Value(u64),
+    I128Value(i128),
+}

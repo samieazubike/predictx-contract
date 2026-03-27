@@ -130,6 +130,166 @@ The full product specification document is available at [`predictx-spec.md`](pre
 
 **Read this document before contributing.**
 
+## Contract Initialization & Configuration
+
+This section explains how to properly initialize and configure the PredictX contracts after deployment.
+
+### Initialization Order
+
+The contracts must be initialized in a specific order to establish cross-contract references correctly:
+
+1. **Deploy all contracts first** - Get the contract addresses for all four contracts
+2. **Initialize Treasury** - Sets up token and market references
+3. **Initialize VotingOracle** - Configures voting parameters and market reference  
+4. **Initialize PredictionMarket** - Main contract with platform configuration
+5. **Initialize PollFactory** - Sets up poll creation limits and market reference
+6. **Set cross-contract addresses** - Link contracts together
+
+### Initialization Parameters
+
+#### Treasury
+```rust
+pub fn initialize(
+    env: Env,
+    admin: Address,
+    token_address: Address,
+    prediction_market_address: Address,
+) -> Result<(), PredictXError>
+```
+
+#### VotingOracle
+```rust
+pub fn initialize(
+    env: Env,
+    admin: Address,
+    prediction_market_address: Address,
+    voting_window_secs: u64,        // 1800-14400 (30min-4hr)
+    consensus_threshold_bps: u32,    // 7000-9500 (70%-95%)
+    admin_review_threshold_bps: u32, // 5000-8000 (50%-80%)
+    dispute_window_secs: u64,       // 43200-172800 (12hr-48hr)
+    dispute_fee: i128,              // Must be >= 0
+) -> Result<(), PredictXError>
+```
+
+#### PredictionMarket
+```rust
+pub fn initialize(
+    env: Env,
+    admin: Address,
+    token_address: Address,
+    treasury_address: Address,
+    platform_fee_bps: u32,          // 0-1000 (0%-10%)
+    voter_reward_bps: u32,          // 0-200 (0%-2%)
+    min_stake_amount: i128,         // Must be > 0
+) -> Result<(), PredictXError>
+```
+
+#### PollFactory
+```rust
+pub fn initialize(
+    env: Env,
+    admin: Address,
+    prediction_market_address: Address,
+    max_polls_per_creator_per_day: u32, // 1-50
+) -> Result<(), PredictXError>
+```
+
+### Cross-Contract Address Setting
+
+After initialization, set the cross-contract references:
+
+```rust
+// In PredictionMarket - set oracle address
+prediction_market.set_oracle_address(&admin, &oracle_address);
+
+// In VotingOracle - set market address  
+voting_oracle.set_market_address(&admin, &market_address);
+
+// In Treasury - set market address
+treasury.set_market_address(&admin, &market_address);
+
+// In PollFactory - set market address
+poll_factory.set_market_address(&admin, &market_address);
+```
+
+### Configuration Management
+
+All contracts support runtime configuration updates by the super admin:
+
+#### Update Configuration
+```rust
+pub fn update_config(
+    env: Env,
+    admin: Address,
+    key: ConfigKey,
+    value: ConfigValue,
+) -> Result<(), PredictXError>
+```
+
+#### Query Configuration
+```rust
+// PredictionMarket only
+pub fn get_config(env: Env) -> PlatformConfig
+```
+
+#### Supported Configuration Keys
+
+| ConfigKey | Type | Range | Description |
+|-----------|------|-------|-------------|
+| PlatformFeeBps | u32 | 0-1000 BPS | Platform fee percentage |
+| VoterRewardBps | u32 | 0-200 BPS | Voter reward percentage |
+| VotingWindowSecs | u64 | 1800-14400 | Voting window duration |
+| ConsensusThresholdBps | u32 | 7000-9500 | Auto-resolve threshold |
+| AdminReviewThresholdBps | u32 | 5000-8000 | Admin review threshold |
+| DisputeWindowSecs | u64 | 43200-172800 | Dispute window duration |
+| DisputeFee | i128 | >= 0 | Cost to open dispute |
+| MinStakeAmount | i128 | > 0 | Minimum stake amount |
+| MaxPollsPerMatch | u32 | 10-100 | Max polls per match |
+
+### Default Values
+
+| Parameter | Default | Range |
+|-----------|---------|-------|
+| Platform fee | 500 BPS (5%) | 0-1000 BPS |
+| Voter reward | 100 BPS (1%) | 0-200 BPS |
+| Voting window | 7200 sec (2h) | 1800-14400 |
+| Auto-resolve threshold | 8500 BPS (85%) | 7000-9500 |
+| Admin review threshold | 6000 BPS (60%) | 5000-8000 |
+| Dispute window | 86400 sec (24h) | 43200-172800 |
+| Min stake amount | Configurable | > 0 |
+| Max polls per match | 50 | 10-100 |
+| Max polls per creator/day | 10 | 1-50 |
+
+### Security Notes
+
+- **Re-initialization is prevented** - Once initialized, contracts cannot be re-initialized
+- **Admin-only configuration** - Only the super admin can update configuration parameters
+- **Range validation** - All configuration updates are validated against allowed ranges
+- **Event emission** - All configuration changes emit `ConfigUpdated` events with old/new values
+- **Version tracking** - Configuration version increments on each update
+
+### Example Initialization Sequence
+
+```rust
+// 1. Deploy contracts and get addresses
+let treasury_address = deploy_treasury();
+let oracle_address = deploy_voting_oracle();  
+let market_address = deploy_prediction_market();
+let factory_address = deploy_poll_factory();
+
+// 2. Initialize contracts
+treasury.initialize(&admin, &token_address, &market_address);
+oracle.initialize(&admin, &market_address, 7200, 8500, 6000, 86400, 10000000);
+market.initialize(&admin, &token_address, &treasury_address, 500, 100, 10000000);
+factory.initialize(&admin, &market_address, 10);
+
+// 3. Set cross-contract addresses
+market.set_oracle_address(&admin, &oracle_address);
+oracle.set_market_address(&admin, &market_address);
+treasury.set_market_address(&admin, &market_address);
+factory.set_market_address(&admin, &market_address);
+```
+
 ## License
 
 See [LICENSE](LICENSE) for details.

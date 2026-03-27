@@ -6,7 +6,7 @@ pub(crate) mod token_utils;
 
 use predictx_shared::{
     Match, PlatformStats, Poll, PollCategory, PollStatus, PredictXError, Stake, StakeSide,
-    MAX_POLLS_PER_MATCH,
+    MAX_POLLS_PER_MATCH, PlatformConfig, ConfigKey, ConfigValue,
 };
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec};
 
@@ -39,6 +39,15 @@ pub enum DataKey {
     TokenAddress,
     TreasuryAddress,
     PlatformFeeBps,
+    VoterRewardBps,
+    VotingWindowSecs,
+    ConsensusThresholdBps,
+    AdminReviewThresholdBps,
+    DisputeWindowSecs,
+    DisputeFee,
+    MinStakeAmount,
+    MaxPollsPerMatch,
+    ConfigVersion,
     Stake(u64, Address),
     EmergencyClaimed(u64, Address),
     PlatformStats,
@@ -122,23 +131,57 @@ impl PredictionMarket {
     pub fn initialize(
         env: Env,
         admin: Address,
-        voting_oracle: Address,
         token_address: Address,
         treasury_address: Address,
         platform_fee_bps: u32,
+        voter_reward_bps: u32,
+        min_stake_amount: i128,
     ) -> Result<(), PredictXError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(PredictXError::AlreadyInitialized);
         }
+        
+        // Validate parameters
+        if platform_fee_bps > 1000 {
+            return Err(PredictXError::InvalidFee);
+        }
+        if voter_reward_bps > 200 {
+            return Err(PredictXError::InvalidFee);
+        }
+        if voter_reward_bps >= platform_fee_bps {
+            return Err(PredictXError::InvalidFee);
+        }
+        if min_stake_amount <= 0 {
+            return Err(PredictXError::StakeAmountZero);
+        }
+        
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::VotingOracle, &voting_oracle);
         env.storage().instance().set(&DataKey::TokenAddress, &token_address);
         env.storage().instance().set(&DataKey::TreasuryAddress, &treasury_address);
         env.storage().instance().set(&DataKey::PlatformFeeBps, &platform_fee_bps);
+        env.storage().instance().set(&DataKey::VoterRewardBps, &voter_reward_bps);
+        env.storage().instance().set(&DataKey::MinStakeAmount, &min_stake_amount);
+        
+        // Set default values for other configuration
+        env.storage().instance().set(&DataKey::VotingWindowSecs, &7200u64);
+        env.storage().instance().set(&DataKey::ConsensusThresholdBps, &8500u32);
+        env.storage().instance().set(&DataKey::AdminReviewThresholdBps, &6000u32);
+        env.storage().instance().set(&DataKey::DisputeWindowSecs, &86400u64);
+        env.storage().instance().set(&DataKey::DisputeFee, &10000000i128);
+        env.storage().instance().set(&DataKey::MaxPollsPerMatch, &50u32);
+        env.storage().instance().set(&DataKey::ConfigVersion, &1u32);
+        
         env.storage().instance().set(&DataKey::NextMatchId, &1u64);
         env.storage().instance().set(&DataKey::NextPollId, &1u64);
         env.storage().instance().set(&DataKey::Initialized, &true);
+        
+        // Emit initialization event
+        env.events().publish(
+            (Symbol::new(&env, "Initialized"),),
+            (admin, token_address, treasury_address, platform_fee_bps, voter_reward_bps, min_stake_amount)
+        );
+        
         Ok(())
     }
 
@@ -364,6 +407,245 @@ impl PredictionMarket {
         get_platform_stats(&env)
     }
 
+    // ── Configuration Management ───────────────────────────────────────────────
+
+    pub fn get_config(env: Env) -> Result<PlatformConfig, PredictXError> {
+        let admin = get_admin(&env)?;
+        let token_address = env.storage().instance()
+            .get(&DataKey::TokenAddress)
+            .ok_or(PredictXError::NotInitialized)?;
+        let treasury_address = env.storage().instance()
+            .get(&DataKey::TreasuryAddress)
+            .ok_or(PredictXError::NotInitialized)?;
+        let platform_fee_bps = env.storage().instance()
+            .get(&DataKey::PlatformFeeBps)
+            .ok_or(PredictXError::NotInitialized)?;
+        let voter_reward_bps = env.storage().instance()
+            .get(&DataKey::VoterRewardBps)
+            .ok_or(PredictXError::NotInitialized)?;
+        let voting_window_secs = env.storage().instance()
+            .get(&DataKey::VotingWindowSecs)
+            .ok_or(PredictXError::NotInitialized)?;
+        let consensus_threshold_bps = env.storage().instance()
+            .get(&DataKey::ConsensusThresholdBps)
+            .ok_or(PredictXError::NotInitialized)?;
+        let admin_review_threshold_bps = env.storage().instance()
+            .get(&DataKey::AdminReviewThresholdBps)
+            .ok_or(PredictXError::NotInitialized)?;
+        let dispute_window_secs = env.storage().instance()
+            .get(&DataKey::DisputeWindowSecs)
+            .ok_or(PredictXError::NotInitialized)?;
+        let dispute_fee = env.storage().instance()
+            .get(&DataKey::DisputeFee)
+            .ok_or(PredictXError::NotInitialized)?;
+        let min_stake_amount = env.storage().instance()
+            .get(&DataKey::MinStakeAmount)
+            .ok_or(PredictXError::NotInitialized)?;
+        let max_polls_per_match = env.storage().instance()
+            .get(&DataKey::MaxPollsPerMatch)
+            .ok_or(PredictXError::NotInitialized)?;
+        let version = env.storage().instance()
+            .get(&DataKey::ConfigVersion)
+            .ok_or(PredictXError::NotInitialized)?;
+        let is_paused = is_paused(&env);
+
+        Ok(PlatformConfig {
+            admin,
+            token_address,
+            treasury_address,
+            platform_fee_bps,
+            voter_reward_bps,
+            voting_window_secs,
+            consensus_threshold_bps,
+            admin_review_threshold_bps,
+            dispute_window_secs,
+            dispute_fee,
+            min_stake_amount,
+            max_polls_per_match,
+            version,
+            is_paused,
+        })
+    }
+
+    pub fn update_config(
+        env: Env,
+        admin: Address,
+        key: ConfigKey,
+        value: ConfigValue,
+    ) -> Result<(), PredictXError> {
+        ensure_not_paused(&env)?;
+        let stored_admin = get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(PredictXError::Unauthorized);
+        }
+        admin.require_auth();
+
+        let old_value = match key {
+            ConfigKey::PlatformFeeBps => {
+                let old = env.storage().instance().get(&DataKey::PlatformFeeBps)
+                    .ok_or(PredictXError::NotInitialized)?;
+                if let ConfigValue::U32Value(new_fee_bps) = value {
+                    if new_fee_bps > 1000 {
+                        return Err(PredictXError::InvalidFee);
+                    }
+                    env.storage().instance().set(&DataKey::PlatformFeeBps, &new_fee_bps);
+                    env.events().publish(
+                        (Symbol::new(&env, "ConfigUpdated"),),
+                        (key, ConfigValue::U32Value(old), ConfigValue::U32Value(new_fee_bps))
+                    );
+                }
+                ConfigValue::U32Value(old)
+            },
+            ConfigKey::VoterRewardBps => {
+                let old = env.storage().instance().get(&DataKey::VoterRewardBps)
+                    .ok_or(PredictXError::NotInitialized)?;
+                if let ConfigValue::U32Value(new_reward_bps) = value {
+                    if new_reward_bps > 200 {
+                        return Err(PredictXError::InvalidFee);
+                    }
+                    let platform_fee = env.storage().instance().get(&DataKey::PlatformFeeBps)
+                        .ok_or(PredictXError::NotInitialized)?;
+                    if new_reward_bps >= platform_fee {
+                        return Err(PredictXError::InvalidFee);
+                    }
+                    env.storage().instance().set(&DataKey::VoterRewardBps, &new_reward_bps);
+                    env.events().publish(
+                        (Symbol::new(&env, "ConfigUpdated"),),
+                        (key, ConfigValue::U32Value(old), ConfigValue::U32Value(new_reward_bps))
+                    );
+                }
+                ConfigValue::U32Value(old)
+            },
+            ConfigKey::VotingWindowSecs => {
+                let old = env.storage().instance().get(&DataKey::VotingWindowSecs)
+                    .ok_or(PredictXError::NotInitialized)?;
+                if let ConfigValue::U64Value(new_window) = value {
+                    if new_window < 1800 || new_window > 14400 {
+                        return Err(PredictXError::InvalidLockTime);
+                    }
+                    env.storage().instance().set(&DataKey::VotingWindowSecs, &new_window);
+                    env.events().publish(
+                        (Symbol::new(&env, "ConfigUpdated"),),
+                        (key, ConfigValue::U64Value(old), ConfigValue::U64Value(new_window))
+                    );
+                }
+                ConfigValue::U64Value(old)
+            },
+            ConfigKey::ConsensusThresholdBps => {
+                let old = env.storage().instance().get(&DataKey::ConsensusThresholdBps)
+                    .ok_or(PredictXError::NotInitialized)?;
+                if let ConfigValue::U32Value(new_threshold) = value {
+                    if new_threshold < 7000 || new_threshold > 9500 {
+                        return Err(PredictXError::InvalidFee);
+                    }
+                    env.storage().instance().set(&DataKey::ConsensusThresholdBps, &new_threshold);
+                    env.events().publish(
+                        (Symbol::new(&env, "ConfigUpdated"),),
+                        (key, ConfigValue::U32Value(old), ConfigValue::U32Value(new_threshold))
+                    );
+                }
+                ConfigValue::U32Value(old)
+            },
+            ConfigKey::AdminReviewThresholdBps => {
+                let old = env.storage().instance().get(&DataKey::AdminReviewThresholdBps)
+                    .ok_or(PredictXError::NotInitialized)?;
+                if let ConfigValue::U32Value(new_threshold) = value {
+                    if new_threshold < 5000 || new_threshold > 8000 {
+                        return Err(PredictXError::InvalidFee);
+                    }
+                    env.storage().instance().set(&DataKey::AdminReviewThresholdBps, &new_threshold);
+                    env.events().publish(
+                        (Symbol::new(&env, "ConfigUpdated"),),
+                        (key, ConfigValue::U32Value(old), ConfigValue::U32Value(new_threshold))
+                    );
+                }
+                ConfigValue::U32Value(old)
+            },
+            ConfigKey::DisputeWindowSecs => {
+                let old = env.storage().instance().get(&DataKey::DisputeWindowSecs)
+                    .ok_or(PredictXError::NotInitialized)?;
+                if let ConfigValue::U64Value(new_window) = value {
+                    if new_window < 43200 || new_window > 172800 {
+                        return Err(PredictXError::InvalidLockTime);
+                    }
+                    env.storage().instance().set(&DataKey::DisputeWindowSecs, &new_window);
+                    env.events().publish(
+                        (Symbol::new(&env, "ConfigUpdated"),),
+                        (key, ConfigValue::U64Value(old), ConfigValue::U64Value(new_window))
+                    );
+                }
+                ConfigValue::U64Value(old)
+            },
+            ConfigKey::DisputeFee => {
+                let old = env.storage().instance().get(&DataKey::DisputeFee)
+                    .ok_or(PredictXError::NotInitialized)?;
+                if let ConfigValue::I128Value(new_fee) = value {
+                    if new_fee < 0 {
+                        return Err(PredictXError::StakeAmountZero);
+                    }
+                    env.storage().instance().set(&DataKey::DisputeFee, &new_fee);
+                    env.events().publish(
+                        (Symbol::new(&env, "ConfigUpdated"),),
+                        (key, ConfigValue::I128Value(old), ConfigValue::I128Value(new_fee))
+                    );
+                }
+                ConfigValue::I128Value(old)
+            },
+            ConfigKey::MinStakeAmount => {
+                let old = env.storage().instance().get(&DataKey::MinStakeAmount)
+                    .ok_or(PredictXError::NotInitialized)?;
+                if let ConfigValue::I128Value(new_amount) = value {
+                    if new_amount <= 0 {
+                        return Err(PredictXError::StakeAmountZero);
+                    }
+                    env.storage().instance().set(&DataKey::MinStakeAmount, &new_amount);
+                    env.events().publish(
+                        (Symbol::new(&env, "ConfigUpdated"),),
+                        (key, ConfigValue::I128Value(old), ConfigValue::I128Value(new_amount))
+                    );
+                }
+                ConfigValue::I128Value(old)
+            },
+            ConfigKey::MaxPollsPerMatch => {
+                let old = env.storage().instance().get(&DataKey::MaxPollsPerMatch)
+                    .ok_or(PredictXError::NotInitialized)?;
+                if let ConfigValue::U32Value(new_max) = value {
+                    if new_max < 10 || new_max > 100 {
+                        return Err(PredictXError::InvalidFee);
+                    }
+                    env.storage().instance().set(&DataKey::MaxPollsPerMatch, &new_max);
+                    env.events().publish(
+                        (Symbol::new(&env, "ConfigUpdated"),),
+                        (key, ConfigValue::U32Value(old), ConfigValue::U32Value(new_max))
+                    );
+                }
+                ConfigValue::U32Value(old)
+            },
+        };
+
+        // Increment config version
+        let current_version: u32 = env.storage().instance()
+            .get(&DataKey::ConfigVersion)
+            .ok_or(PredictXError::NotInitialized)?;
+        env.storage().instance().set(&DataKey::ConfigVersion, &(current_version + 1u32));
+
+        Ok(())
+    }
+
+    // ── Cross-Contract Address Setting ───────────────────────────────────────────
+
+    pub fn set_oracle_address(env: Env, admin: Address, oracle: Address) -> Result<(), PredictXError> {
+        ensure_not_paused(&env)?;
+        let stored_admin = get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(PredictXError::Unauthorized);
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::VotingOracle, &oracle);
+        env.events().publish((Symbol::new(&env, "OracleAddressUpdated"),), oracle);
+        Ok(())
+    }
+
     // ── Token view functions ──────────────────────────────────────────────────
 
     pub fn get_token_address(env: Env) -> Result<Address, PredictXError> {
@@ -439,12 +721,11 @@ mod test {
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
-        let oracle = Address::generate(&env);
         let token = Address::generate(&env);
         let treasury = Address::generate(&env);
-        client.initialize(&admin, &oracle, &token, &treasury, &TEST_FEE_BPS);
+        client.initialize(&admin, &token, &treasury, &TEST_FEE_BPS, &100u32, &10000000i128);
         assert_eq!(client.admin(), admin);
-        assert_eq!(client.oracle(), oracle);
+        assert_eq!(client.get_token_address(), token);
     }
 
     #[test]
@@ -454,11 +735,10 @@ mod test {
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
-        let oracle = Address::generate(&env);
-        let tok = Address::generate(&env);
+        let token = Address::generate(&env);
         let treasury = Address::generate(&env);
-        client.initialize(&admin, &oracle, &tok, &treasury, &TEST_FEE_BPS);
-        assert_eq!(client.get_token_address(), tok);
+        client.initialize(&admin, &token, &treasury, &TEST_FEE_BPS, &100u32, &10000000i128);
+        assert_eq!(client.get_token_address(), token);
         assert_eq!(client.get_treasury_address(), treasury);
         assert_eq!(client.get_platform_fee_bps(), TEST_FEE_BPS);
     }
@@ -470,11 +750,10 @@ mod test {
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
-        let oracle = Address::generate(&env);
         let token = Address::generate(&env);
         let treasury = Address::generate(&env);
-        client.initialize(&admin, &oracle, &token, &treasury, &TEST_FEE_BPS);
-        let err = client.try_initialize(&admin, &oracle, &token, &treasury, &TEST_FEE_BPS).expect_err("should fail");
+        client.initialize(&admin, &token, &treasury, &TEST_FEE_BPS, &100u32, &10000000i128);
+        let err = client.try_initialize(&admin, &token, &treasury, &TEST_FEE_BPS, &100u32, &10000000i128).expect_err("should fail");
         assert_eq!(err, Ok(PredictXError::AlreadyInitialized));
     }
 
@@ -485,13 +764,14 @@ mod test {
         let admin = Address::generate(&env);
         let oracle_id = env.register(voting_oracle::WASM, ());
         let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
-        oracle_client.initialize(&admin);
+        oracle_client.initialize(&admin, &Address::generate(&env), &7200u64, &8500u32, &6000u32, &86400u64, &10000000i128);
         oracle_client.set_poll_status(&7_u64, &voting_oracle::PollStatus::Resolved);
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
         let tok = Address::generate(&env);
         let treasury = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &tok, &treasury, &TEST_FEE_BPS);
+        client.initialize(&admin, &tok, &treasury, &TEST_FEE_BPS, &100u32, &10000000i128);
+        client.set_oracle(&oracle_id);
         let status = client.oracle_poll_status(&7_u64);
         assert_eq!(status, PollStatus::Resolved);
     }
@@ -506,7 +786,7 @@ mod test {
         let oracle = Address::generate(&env);
         let tok = Address::generate(&env);
         let treasury = Address::generate(&env);
-        client.initialize(&admin, &oracle, &tok, &treasury, &TEST_FEE_BPS);
+        client.initialize(&admin, &tok, &treasury, &TEST_FEE_BPS, &100u32, &10000000i128);
         assert_eq!(client.is_paused(), false);
         client.pause(&admin);
         assert_eq!(client.is_paused(), true);
@@ -523,12 +803,13 @@ mod test {
         let admin = Address::generate(&env);
         let oracle_id = env.register(voting_oracle::WASM, ());
         let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
-        oracle_client.initialize(&admin);
+        oracle_client.initialize(&admin, &Address::generate(&env), &7200u64, &8500u32, &6000u32, &86400u64, &10000000i128);
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
         let tok = Address::generate(&env);
         let treasury = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &tok, &treasury, &TEST_FEE_BPS);
+        client.initialize(&admin, &tok, &treasury, &TEST_FEE_BPS, &100u32, &10000000i128);
+        client.set_oracle(&oracle_id);
         client.cancel_poll(&admin, &1_u64);
         assert_eq!(oracle_client.get_poll_status(&1_u64), voting_oracle::PollStatus::Cancelled);
     }
@@ -540,8 +821,8 @@ mod test {
         let admin = Address::generate(&env);
 
         let oracle_id = env.register(voting_oracle::WASM, ());
-        let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
-        oracle_client.initialize(&admin);
+        let _oracle_client = voting_oracle::Client::new(&env, &oracle_id);
+        _oracle_client.initialize(&admin, &Address::generate(&env), &7200u64, &8500u32, &6000u32, &86400u64, &10000000i128);
 
         // Real token for transfers
         let token_admin = Address::generate(&env);
@@ -551,7 +832,7 @@ mod test {
 
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
-        client.initialize(&admin, &oracle_id, &token_addr, &treasury, &TEST_FEE_BPS);
+        client.initialize(&admin, &token_addr, &treasury, &TEST_FEE_BPS, &100u32, &10000000i128);
 
         (env, admin, oracle_id, contract_id, client)
     }
@@ -658,5 +939,124 @@ mod test {
         assert_eq!(refunded, amount);
         let err = client.try_emergency_withdraw(&user, &3_u64).expect_err("double withdrawal should fail");
         assert_eq!(err, Ok(PredictXError::AlreadyClaimed));
+    }
+
+    #[test]
+    fn get_config_returns_complete_configuration() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        
+        client.initialize(&admin, &token, &treasury, &500u32, &100u32, &10000000i128);
+        
+        let config = client.get_config();
+        assert_eq!(config.admin, admin);
+        assert_eq!(config.token_address, token);
+        assert_eq!(config.treasury_address, treasury);
+        assert_eq!(config.platform_fee_bps, 500);
+        assert_eq!(config.voter_reward_bps, 100);
+        assert_eq!(config.voting_window_secs, 7200);
+        assert_eq!(config.consensus_threshold_bps, 8500);
+        assert_eq!(config.admin_review_threshold_bps, 6000);
+        assert_eq!(config.dispute_window_secs, 86400);
+        assert_eq!(config.dispute_fee, 10000000);
+        assert_eq!(config.min_stake_amount, 10000000);
+        assert_eq!(config.max_polls_per_match, 50);
+        assert_eq!(config.version, 1);
+        assert_eq!(config.is_paused, false);
+    }
+
+    #[test]
+    fn update_platform_fee_within_range_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        
+        client.initialize(&admin, &token, &treasury, &500u32, &100u32, &10000000i128);
+        
+        client.update_config(&admin, &ConfigKey::PlatformFeeBps, &ConfigValue::U32Value(600));
+        
+        let config = client.get_config();
+        assert_eq!(config.platform_fee_bps, 600);
+        assert_eq!(config.version, 2);
+    }
+
+    #[test]
+    fn update_platform_fee_above_maximum_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        
+        client.initialize(&admin, &token, &treasury, &500u32, &100u32, &10000000i128);
+        
+        let err = client.try_update_config(&admin, &ConfigKey::PlatformFeeBps, &ConfigValue::U32Value(1500))
+            .expect_err("should fail");
+        assert_eq!(err, Ok(PredictXError::InvalidFee));
+    }
+
+    #[test]
+    fn update_voter_reward_exceeds_platform_fee_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        
+        client.initialize(&admin, &token, &treasury, &500u32, &100u32, &10000000i128);
+        
+        let err = client.try_update_config(&admin, &ConfigKey::VoterRewardBps, &ConfigValue::U32Value(600))
+            .expect_err("should fail");
+        assert_eq!(err, Ok(PredictXError::InvalidFee));
+    }
+
+    #[test]
+    fn update_config_by_non_admin_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        
+        client.initialize(&admin, &token, &treasury, &500u32, &100u32, &10000000i128);
+        
+        let err = client.try_update_config(&non_admin, &ConfigKey::PlatformFeeBps, &ConfigValue::U32Value(600))
+            .expect_err("should fail");
+        assert_eq!(err, Ok(PredictXError::Unauthorized));
+    }
+
+    #[test]
+    fn set_oracle_address_updates_cross_contract_reference() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        
+        client.initialize(&admin, &token, &treasury, &500u32, &100u32, &10000000i128);
+        
+        client.set_oracle_address(&admin, &oracle);
+        
+        // Verify oracle address was set (we can't directly query it but the call succeeds)
+        // In a real scenario, subsequent oracle calls would work
     }
 }

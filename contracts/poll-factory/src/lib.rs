@@ -1,7 +1,7 @@
 #![no_std]
 
-use predictx_shared::{PredictXError, Poll, PollCategory, PollStatus};
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
+use predictx_shared::{PredictXError, Poll, PollCategory, PollStatus, ConfigKey, ConfigValue};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol};
 
 #[contract]
 pub struct PollFactory;
@@ -10,6 +10,8 @@ pub struct PollFactory;
 #[derive(Clone)]
 enum DataKey {
     Admin,
+    PredictionMarketAddress,
+    MaxPollsPerCreatorPerDay,
     NextPollId,
     Poll(u64),
 }
@@ -33,14 +35,33 @@ fn bump_poll_id(env: &Env) -> u64 {
 
 #[contractimpl]
 impl PollFactory {
-    pub fn initialize(env: Env, admin: Address) -> Result<(), PredictXError> {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        prediction_market_address: Address,
+        max_polls_per_creator_per_day: u32,
+    ) -> Result<(), PredictXError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(PredictXError::AlreadyInitialized);
         }
 
+        // Validate parameters
+        if max_polls_per_creator_per_day < 1 || max_polls_per_creator_per_day > 50 {
+            return Err(PredictXError::InvalidFee);
+        }
+
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::PredictionMarketAddress, &prediction_market_address);
+        env.storage().instance().set(&DataKey::MaxPollsPerCreatorPerDay, &max_polls_per_creator_per_day);
         env.storage().instance().set(&DataKey::NextPollId, &1_u64);
+
+        // Emit initialization event
+        env.events().publish(
+            (Symbol::new(&env, "Initialized"),),
+            (admin, prediction_market_address, max_polls_per_creator_per_day)
+        );
+
         Ok(())
     }
 
@@ -89,6 +110,55 @@ impl PollFactory {
             .get(&DataKey::Poll(poll_id))
             .ok_or(PredictXError::PollNotFound)
     }
+
+    // ── Configuration Management ───────────────────────────────────────────────
+
+    pub fn update_config(
+        env: Env,
+        admin: Address,
+        key: ConfigKey,
+        value: ConfigValue,
+    ) -> Result<(), PredictXError> {
+        let stored_admin = get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(PredictXError::Unauthorized);
+        }
+        admin.require_auth();
+
+        let old_value = match key {
+            ConfigKey::MaxPollsPerMatch => {
+                let old = env.storage().instance().get(&DataKey::MaxPollsPerCreatorPerDay)
+                    .ok_or(PredictXError::NotInitialized)?;
+                if let ConfigValue::U32Value(new_max) = value {
+                    if new_max < 1 || new_max > 50 {
+                        return Err(PredictXError::InvalidFee);
+                    }
+                    env.storage().instance().set(&DataKey::MaxPollsPerCreatorPerDay, &new_max);
+                    env.events().publish(
+                        (Symbol::new(&env, "ConfigUpdated"),),
+                        (key, ConfigValue::U32Value(old), ConfigValue::U32Value(new_max))
+                    );
+                }
+                ConfigValue::U32Value(old)
+            },
+            _ => return Err(PredictXError::Unauthorized), // Other keys not supported in PollFactory
+        };
+
+        Ok(())
+    }
+
+    // ── Cross-Contract Address Setting ───────────────────────────────────────────
+
+    pub fn set_market_address(env: Env, admin: Address, market: Address) -> Result<(), PredictXError> {
+        let stored_admin = get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(PredictXError::Unauthorized);
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::PredictionMarketAddress, &market);
+        env.events().publish((Symbol::new(&env, "MarketAddressUpdated"),), market);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -108,7 +178,8 @@ mod test {
         let client = PollFactoryClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let market = Address::generate(&env);
+        client.initialize(&admin, &market, &10u32);
 
         let creator = Address::generate(&env);
         let question = String::from_str(&env, "Will Palmer score?");

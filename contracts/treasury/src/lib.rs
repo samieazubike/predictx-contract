@@ -1,7 +1,7 @@
 #![no_std]
 
 use predictx_shared::PredictXError;
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 
 #[contract]
 pub struct Treasury;
@@ -10,6 +10,8 @@ pub struct Treasury;
 #[derive(Clone)]
 enum DataKey {
     Admin,
+    TokenAddress,
+    PredictionMarketAddress,
     Balance(Address),
 }
 
@@ -29,13 +31,27 @@ fn get_balance(env: &Env, who: &Address) -> i128 {
 
 #[contractimpl]
 impl Treasury {
-    pub fn initialize(env: Env, admin: Address) -> Result<(), PredictXError> {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        token_address: Address,
+        prediction_market_address: Address,
+    ) -> Result<(), PredictXError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(PredictXError::AlreadyInitialized);
         }
 
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::TokenAddress, &token_address);
+        env.storage().instance().set(&DataKey::PredictionMarketAddress, &prediction_market_address);
+
+        // Emit initialization event
+        env.events().publish(
+            (Symbol::new(&env, "Initialized"),),
+            (admin, token_address, prediction_market_address)
+        );
+
         Ok(())
     }
 
@@ -68,6 +84,19 @@ impl Treasury {
         }
         Ok(get_balance(&env, &who))
     }
+
+    // ── Cross-Contract Address Setting ───────────────────────────────────────────
+
+    pub fn set_market_address(env: Env, admin: Address, market: Address) -> Result<(), PredictXError> {
+        let stored_admin = get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(PredictXError::Unauthorized);
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::PredictionMarketAddress, &market);
+        env.events().publish((Symbol::new(&env, "MarketAddressUpdated"),), market);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -87,7 +116,9 @@ mod test {
         let client = TreasuryClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let token = Address::generate(&env);
+        let market = Address::generate(&env);
+        client.initialize(&admin, &token, &market);
 
         let user = Address::generate(&env);
         assert_eq!(client.deposit(&user, &10_i128), 10_i128);
