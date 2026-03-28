@@ -95,7 +95,10 @@ impl PollFactory {
 extern crate std;
 
 #[cfg(test)]
-mod test {
+mod test;
+
+#[cfg(test)]
+mod legacy_test {
     use super::*;
     use soroban_sdk::testutils::Address as _;
 
