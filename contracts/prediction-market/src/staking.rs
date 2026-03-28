@@ -1,18 +1,24 @@
 use soroban_sdk::{Address, Env, Symbol, Vec};
 use predictx_shared::{
     Poll, PollStatus, Stake, StakeSide, PredictXError,
-    MIN_STAKE_AMOUNT, BPS_DENOMINATOR,
+    MIN_STAKE_AMOUNT, MAX_STAKE_AMOUNT, BPS_DENOMINATOR, LOCK_TIME_BUFFER_SECS,
+    safe_add, safe_sub, safe_proportional, validate_stake_amount,
+    is_before_lock_time, verify_solvency, 
+    ReentrancyGuard, ReentrancyGuardFunction,
 };
 use crate::{DataKey, PoolInfo, get_platform_stats, set_platform_stats, ensure_not_paused, token_utils};
 
 // ── Stake placement ───────────────────────────────────────────────────────────
 
-/// Place a stake on a poll outcome. Follows Checks-Effects-Interactions pattern.
+/// Place a stake on a poll outcome. Follows Checks-Effects-Interactions pattern
+/// with reentrancy protection.
 ///
-/// 1. Validates all preconditions (checks)
-/// 2. Transfers tokens from staker to contract (interactions — first because
-///    Soroban token transfers are safe against re-entrancy)
-/// 3. Records state changes (effects)
+/// Security measures:
+/// 1. Reentrancy guard prevents recursive calls
+/// 2. Input validation for amount (positive, min/max bounds)
+/// 3. Lock time validation with buffer to prevent frontrunning
+/// 4. Double-stake prevention
+/// 5. State changes before external calls (CEI pattern)
 pub fn stake(
     env: &Env,
     staker: Address,
@@ -20,17 +26,16 @@ pub fn stake(
     amount: i128,
     side: StakeSide,
 ) -> Result<Stake, PredictXError> {
+    // ── Reentrancy protection ──────────────────────────────────────────────
+    let _guard = ReentrancyGuard::new(env, ReentrancyGuardFunction::Stake);
+
     staker.require_auth();
     ensure_not_paused(env)?;
 
     // ── Checks ────────────────────────────────────────────────────────────────
 
-    if amount <= 0 {
-        return Err(PredictXError::StakeAmountZero);
-    }
-    if amount < MIN_STAKE_AMOUNT {
-        return Err(PredictXError::StakeBelowMinimum);
-    }
+    // Validate stake amount bounds (prevents overflow attacks)
+    validate_stake_amount(amount, MIN_STAKE_AMOUNT, MAX_STAKE_AMOUNT)?;
 
     let mut poll: Poll = env
         .storage()
@@ -38,14 +43,19 @@ pub fn stake(
         .get(&DataKey::Poll(poll_id))
         .ok_or(PredictXError::PollNotFound)?;
 
+    // Poll must be active
     if poll.status != PollStatus::Active {
         return Err(PredictXError::PollNotActive);
     }
 
-    if env.ledger().timestamp() >= poll.lock_time {
+    // Check lock time with buffer to prevent frontrunning
+    // Users cannot stake too close to lock time (frontrunning prevention)
+    let current_time = env.ledger().timestamp();
+    if !is_before_lock_time(current_time, poll.lock_time, LOCK_TIME_BUFFER_SECS) {
         return Err(PredictXError::PollLocked);
     }
 
+    // Check if user has already staked
     if env
         .storage()
         .persistent()
@@ -54,11 +64,8 @@ pub fn stake(
         return Err(PredictXError::AlreadyStaked);
     }
 
-    // ── Interactions ──────────────────────────────────────────────────────────
-
-    token_utils::transfer_to_contract(env, &staker, amount)?;
-
     // ── Effects ───────────────────────────────────────────────────────────────
+    // State changes happen BEFORE external token transfer (CEI pattern)
 
     let stake_record = Stake {
         user: staker.clone(),
@@ -66,7 +73,7 @@ pub fn stake(
         amount,
         side,
         claimed: false,
-        staked_at: env.ledger().timestamp(),
+        staked_at: current_time,
     };
 
     // Store stake record + flag
@@ -77,14 +84,14 @@ pub fn stake(
         .persistent()
         .set(&DataKey::HasStaked(poll_id, staker.clone()), &true);
 
-    // Update pool totals
+    // Update pool totals using safe arithmetic
     match side {
         StakeSide::Yes => {
-            poll.yes_pool += amount;
+            poll.yes_pool = safe_add(poll.yes_pool, amount)?;
             poll.yes_count += 1;
         }
         StakeSide::No => {
-            poll.no_pool += amount;
+            poll.no_pool = safe_add(poll.no_pool, amount)?;
             poll.no_count += 1;
         }
     }
@@ -103,11 +110,16 @@ pub fn stake(
         .persistent()
         .set(&DataKey::UserStakes(staker.clone()), &user_stakes);
 
-    // Update platform stats
+    // Update platform stats using safe arithmetic
     let mut stats = get_platform_stats(env);
-    stats.total_value_locked += amount;
+    stats.total_value_locked = safe_add(stats.total_value_locked, amount)?;
     stats.total_stakes_placed += 1;
     set_platform_stats(env, &stats);
+
+    // ── Interactions ──────────────────────────────────────────────────────────
+    // External token transfer happens LAST after all state changes
+
+    token_utils::transfer_to_contract(env, &staker, amount)?;
 
     // Emit event
     env.events().publish(
@@ -145,14 +157,15 @@ pub fn has_user_staked(env: &Env, poll_id: u64, user: &Address) -> bool {
 
 /// Calculate potential winnings **before** a stake is placed (read-only UI preview).
 ///
-/// Formula (integer arithmetic, all in base token units):
+/// Formula (safe integer arithmetic, all in base token units):
 /// ```text
 /// pool_on_side_after  = pool_on_side + amount
 /// total_pool_after    = yes_pool + no_pool + amount
 /// winnings = amount * total_pool_after * (BPS_DENOMINATOR - PLATFORM_FEE_BPS)
 ///            / (pool_on_side_after * BPS_DENOMINATOR)
 /// ```
-/// Integer division rounds down — dust stays in contract (benefits the platform).
+/// Uses checked arithmetic to prevent overflow. Integer division rounds down
+/// — dust stays in contract (benefits the platform).
 pub fn calculate_potential_winnings(
     env: &Env,
     poll_id: u64,
@@ -174,15 +187,21 @@ pub fn calculate_potential_winnings(
         StakeSide::No => poll.no_pool,
     };
 
-    let pool_on_side_after = pool_on_side + amount;
-    let total_pool_after = poll.yes_pool + poll.no_pool + amount;
+    // Use safe arithmetic to prevent overflow
+    let pool_on_side_after = safe_add(pool_on_side, amount)?;
+    let total_pool_after = safe_add(safe_add(poll.yes_pool, poll.no_pool)?, amount)?;
 
     let fee_bps = token_utils::get_platform_fee_bps(env);
     let fee_factor = (BPS_DENOMINATOR - fee_bps) as i128;
     let bps = BPS_DENOMINATOR as i128;
 
     // winnings = (amount / pool_on_side_after) * total_pool_after * (1 - fee%)
-    let winnings = amount * total_pool_after * fee_factor / (pool_on_side_after * bps);
+    // Use safe_proportional to prevent overflow
+    let winnings = safe_proportional(
+        safe_mul(amount, total_pool_after)?,
+        fee_factor,
+        safe_mul(pool_on_side_after, bps)?,
+    )?;
 
     Ok(winnings)
 }

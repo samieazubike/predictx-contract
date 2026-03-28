@@ -33,3 +33,15 @@ pub const EMERGENCY_TIMEOUT_SECS: u64 = 604_800;
 
 /// Minimum stake amount in token base units. `10_000_000` = 10 tokens (7 decimal places).
 pub const MIN_STAKE_AMOUNT: i128 = 10_000_000;
+
+/// Maximum stake amount in token base units. `1_000_000_000_000` = 1,000,000 tokens (7 decimal places).
+/// This prevents single large stakes from dominating a pool.
+pub const MAX_STAKE_AMOUNT: i128 = 1_000_000_000_000;
+
+/// Buffer time in seconds before lock time where staking is not allowed.
+/// `60` = 1 minute - protects against frontrunning near lock time.
+pub const LOCK_TIME_BUFFER_SECS: u64 = 60;
+
+/// Maximum number of concurrent reentrancy locks allowed.
+/// Set to 1 as we should never have nested reentrant calls.
+pub const MAX_REENTRANCY_DEPTH: u32 = 1;

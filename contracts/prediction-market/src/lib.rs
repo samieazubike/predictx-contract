@@ -6,7 +6,7 @@ pub(crate) mod token_utils;
 
 use predictx_shared::{
     Match, PlatformStats, Poll, PollCategory, PollStatus, PredictXError, Stake, StakeSide,
-    MAX_POLLS_PER_MATCH,
+    ReentrancyGuard, ReentrancyGuardFunction, safe_sub, MAX_POLLS_PER_MATCH,
 };
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec};
 
@@ -206,6 +206,8 @@ impl PredictionMarket {
     }
 
     pub fn emergency_withdraw(env: Env, user: Address, poll_id: u64) -> Result<i128, PredictXError> {
+        // Reentrancy protection
+        let _guard = ReentrancyGuard::new(&env, ReentrancyGuardFunction::EmergencyWithdraw);
         user.require_auth();
         if has_emergency_claimed(&env, poll_id, &user) {
             return Err(PredictXError::AlreadyClaimed);
@@ -229,7 +231,7 @@ impl PredictionMarket {
         token_utils::transfer_from_contract(&env, &user, stake.amount)?;
 
         let mut stats = get_platform_stats(&env);
-        stats.total_value_locked -= stake.amount;
+        stats.total_value_locked = safe_sub(stats.total_value_locked, stake.amount)?;
         set_platform_stats(&env, &stats);
         env.events().publish((Symbol::new(&env, "EmergencyWithdrawal"), poll_id, user.clone()), stake.amount);
         Ok(stake.amount)
@@ -247,6 +249,14 @@ impl PredictionMarket {
     ) -> Result<u64, PredictXError> {
         ensure_not_paused(&env)?;
         creator.require_auth();
+        // Input validation: question length, lock_time buffer
+        if question.len() as u32 > MAX_QUESTION_LENGTH {
+            return Err(PredictXError::PollQuestionTooLong);
+        }
+        let now = env.ledger().timestamp();
+        if !predictx_shared::is_before_lock_time(now, lock_time, LOCK_TIME_BUFFER_SECS) {
+            return Err(PredictXError::InvalidLockTime);
+        }
 
         // Validate match exists
         let _m: Match = env
