@@ -29,8 +29,11 @@ pub fn create_match(
     kickoff_time: u64,
 ) -> Result<u64, PredictXError> {
     require_admin(env, &admin)?;
-
     let now = env.ledger().timestamp();
+    // Input validation: team/league/venue non-empty, kickoff in future
+    if home_team.len() == 0 || away_team.len() == 0 || league.len() == 0 || venue.len() == 0 {
+        return Err(PredictXError::InvalidPollCategory); // Use a more specific error if available
+    }
     if kickoff_time <= now {
         return Err(PredictXError::InvalidLockTime);
     }

@@ -2,11 +2,15 @@
 
 pub mod constants;
 pub mod errors;
+pub mod math;
+pub mod security;
 pub mod storage;
 pub mod types;
 
 pub use constants::*;
 pub use errors::PredictXError;
+pub use math::*;
+pub use security::*;
 pub use storage::DataKey;
 pub use types::*;
 
@@ -44,5 +48,42 @@ mod test {
     fn poll_status_discriminants_are_stable() {
         assert_eq!(PollStatus::Active as u32, 0);
         assert_eq!(PollStatus::Cancelled as u32, 6);
+    }
+
+    #[test]
+    fn security_constants_are_reasonable() {
+        // Lock buffer should be at least 1 minute to prevent frontrunning
+        assert!(LOCK_TIME_BUFFER_SECS >= 60);
+        // Max stake should be greater than min stake
+        assert!(MAX_STAKE_AMOUNT > MIN_STAKE_AMOUNT);
+    }
+
+    #[test]
+    fn safe_math_functions_work() {
+        assert_eq!(super::safe_add(1, 2).unwrap(), 3);
+        assert_eq!(super::safe_sub(5, 3).unwrap(), 2);
+        assert_eq!(super::safe_mul(3, 4).unwrap(), 12);
+        assert_eq!(super::safe_div(10, 2).unwrap(), 5);
+    }
+
+    #[test]
+    fn validate_stake_amount_works() {
+        assert!(validate_stake_amount(100, MIN_STAKE_AMOUNT, MAX_STAKE_AMOUNT).is_ok());
+        assert_eq!(
+            validate_stake_amount(0, MIN_STAKE_AMOUNT, MAX_STAKE_AMOUNT),
+            Err(PredictXError::StakeAmountZero)
+        );
+        assert_eq!(
+            validate_stake_amount(-1, MIN_STAKE_AMOUNT, MAX_STAKE_AMOUNT),
+            Err(PredictXError::StakeAmountZero)
+        );
+        assert_eq!(
+            validate_stake_amount(5, MIN_STAKE_AMOUNT, MAX_STAKE_AMOUNT),
+            Err(PredictXError::StakeBelowMinimum)
+        );
+        assert_eq!(
+            validate_stake_amount(MAX_STAKE_AMOUNT + 1, MIN_STAKE_AMOUNT, MAX_STAKE_AMOUNT),
+            Err(PredictXError::StakeExceedsLimit)
+        );
     }
 }

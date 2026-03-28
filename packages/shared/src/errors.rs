@@ -72,4 +72,18 @@ pub enum PredictXError {
     ContractPaused = 33,
     /// Stake amount is below the minimum required.
     StakeBelowMinimum = 34,
+    /// Arithmetic overflow occurred.
+    Overflow = 35,
+    /// Arithmetic underflow occurred.
+    Underflow = 36,
+    /// Division by zero attempted.
+    DivisionByZero = 37,
+    /// Reentrancy attack detected.
+    ReentrancyGuard = 38,
+    /// Reentrancy attempt from non-contract address.
+    NotContractCall = 39,
+    /// Solvency invariant violated.
+    SolvencyInvariantViolated = 40,
+    /// Invalid stake amount (exceeds maximum limit).
+    StakeExceedsLimit = 41,
 }
