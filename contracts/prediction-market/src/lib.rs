@@ -423,6 +423,9 @@ impl PredictionMarket {
 extern crate std;
 
 #[cfg(test)]
+mod integration_tests;
+
+#[cfg(test)]
 mod test {
     use super::*;
     use predictx_shared::StakeSide;
