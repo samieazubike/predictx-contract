@@ -54,6 +54,15 @@ pub enum VoteChoice {
     Unclear = 2,
 }
 
+/// Access-control roles used across PredictX contracts.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Role {
+    SuperAdmin = 0,
+    Admin = 1,
+    Oracle = 2,
+}
+
 // ── Structs ───────────────────────────────────────────────────────────────────
 
 /// A football match that polls are grouped under.

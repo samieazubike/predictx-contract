@@ -5,7 +5,12 @@ mod staking;
 pub(crate) mod token_utils;
 
 use predictx_shared::{
-    Match, PlatformStats, Poll, PollCategory, PollStatus, PredictXError, Stake, StakeSide,
+    accept_super_admin_transfer, add_admin as shared_add_admin, get_admins as shared_get_admins,
+    get_oracle as shared_get_oracle, get_super_admin as shared_get_super_admin,
+    is_admin as shared_is_admin,
+    propose_super_admin_transfer, remove_admin as shared_remove_admin, require_admin,
+    set_oracle as shared_set_oracle, DataKey as SharedDataKey, Match,
+    PlatformStats, Poll, PollCategory, PollStatus, PredictXError, Stake, StakeSide,
     MAX_POLLS_PER_MATCH,
 };
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec};
@@ -65,13 +70,11 @@ pub struct PoolInfo {
 }
 
 fn get_admin(env: &Env) -> Result<Address, PredictXError> {
-    env.storage().instance().get(&DataKey::Admin)
-        .ok_or(PredictXError::NotInitialized)
+    shared_get_super_admin(env)
 }
 
 fn get_oracle(env: &Env) -> Result<Address, PredictXError> {
-    env.storage().instance().get(&DataKey::VotingOracle)
-        .ok_or(PredictXError::NotInitialized)
+    shared_get_oracle(env)
 }
 
 fn is_paused(env: &Env) -> bool {
@@ -133,6 +136,9 @@ impl PredictionMarket {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::VotingOracle, &voting_oracle);
+        env.storage().instance().set(&SharedDataKey::SuperAdmin, &admin);
+        env.storage().instance().set(&SharedDataKey::OracleAddress, &voting_oracle);
+        env.storage().instance().set(&SharedDataKey::AdminList, &Vec::<Address>::new(&env));
         env.storage().instance().set(&DataKey::TokenAddress, &token_address);
         env.storage().instance().set(&DataKey::TreasuryAddress, &treasury_address);
         env.storage().instance().set(&DataKey::PlatformFeeBps, &platform_fee_bps);
@@ -143,29 +149,54 @@ impl PredictionMarket {
     }
 
     pub fn admin(env: Env) -> Result<Address, PredictXError> { get_admin(&env) }
+    pub fn get_super_admin(env: Env) -> Result<Address, PredictXError> { shared_get_super_admin(&env) }
+    pub fn get_admins(env: Env) -> Vec<Address> { shared_get_admins(&env) }
+    pub fn is_admin(env: Env, address: Address) -> Result<bool, PredictXError> {
+        shared_is_admin(&env, &address)
+    }
     pub fn oracle(env: Env) -> Result<Address, PredictXError> { get_oracle(&env) }
 
-    pub fn set_oracle(env: Env, voting_oracle: Address) -> Result<(), PredictXError> {
+    pub fn set_oracle(env: Env, super_admin: Address, voting_oracle: Address) -> Result<(), PredictXError> {
         ensure_not_paused(&env)?;
-        let admin = get_admin(&env)?;
-        admin.require_auth();
+        shared_set_oracle(&env, &super_admin, voting_oracle.clone())?;
         env.storage().instance().set(&DataKey::VotingOracle, &voting_oracle);
+        env.events().publish((Symbol::new(&env, "OracleSet"),), voting_oracle);
+        Ok(())
+    }
+
+    pub fn add_admin(env: Env, super_admin: Address, new_admin: Address) -> Result<(), PredictXError> {
+        shared_add_admin(&env, &super_admin, new_admin.clone())?;
+        env.events().publish((Symbol::new(&env, "AdminAdded"),), new_admin);
+        Ok(())
+    }
+
+    pub fn remove_admin(env: Env, super_admin: Address, admin_to_remove: Address) -> Result<(), PredictXError> {
+        shared_remove_admin(&env, &super_admin, admin_to_remove.clone())?;
+        env.events().publish((Symbol::new(&env, "AdminRemoved"),), admin_to_remove);
+        Ok(())
+    }
+
+    pub fn propose_super_admin_transfer(env: Env, super_admin: Address, new_super_admin: Address) -> Result<(), PredictXError> {
+        propose_super_admin_transfer(&env, &super_admin, new_super_admin.clone())?;
+        env.events().publish((Symbol::new(&env, "SuperAdminTransferProposed"),), new_super_admin);
+        Ok(())
+    }
+
+    pub fn accept_super_admin_transfer(env: Env, pending_super_admin: Address) -> Result<(), PredictXError> {
+        accept_super_admin_transfer(&env, &pending_super_admin)?;
+        env.events().publish((Symbol::new(&env, "SuperAdminTransferred"),), pending_super_admin);
         Ok(())
     }
 
     pub fn pause(env: Env, admin: Address) -> Result<(), PredictXError> {
-        let stored_admin = get_admin(&env)?;
-        if admin != stored_admin { return Err(PredictXError::Unauthorized); }
-        admin.require_auth();
+        require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Paused, &true);
         env.events().publish((Symbol::new(&env, "ContractPaused"),), true);
         Ok(())
     }
 
     pub fn unpause(env: Env, admin: Address) -> Result<(), PredictXError> {
-        let stored_admin = get_admin(&env)?;
-        if admin != stored_admin { return Err(PredictXError::Unauthorized); }
-        admin.require_auth();
+        require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Paused, &false);
         env.events().publish((Symbol::new(&env, "ContractUnpaused"),), true);
         Ok(())
@@ -181,12 +212,10 @@ impl PredictionMarket {
 
     pub fn cancel_poll(env: Env, admin: Address, poll_id: u64) -> Result<(), PredictXError> {
         ensure_not_paused(&env)?;
-        let stored_admin = get_admin(&env)?;
-        if admin != stored_admin { return Err(PredictXError::Unauthorized); }
-        admin.require_auth();
+        require_admin(&env, &admin)?;
         let oracle_id = get_oracle(&env)?;
         let client = voting_oracle::Client::new(&env, &oracle_id);
-        client.set_poll_status(&poll_id, &voting_oracle::PollStatus::Cancelled);
+        client.set_poll_status(&admin, &poll_id, &voting_oracle::PollStatus::Cancelled);
         env.events().publish((Symbol::new(&env, "PollCancelled"),), poll_id);
         Ok(())
     }
@@ -486,7 +515,7 @@ mod test {
         let oracle_id = env.register(voting_oracle::WASM, ());
         let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
         oracle_client.initialize(&admin);
-        oracle_client.set_poll_status(&7_u64, &voting_oracle::PollStatus::Resolved);
+        oracle_client.set_poll_status(&admin, &7_u64, &voting_oracle::PollStatus::Resolved);
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
         let tok = Address::generate(&env);
@@ -510,7 +539,7 @@ mod test {
         assert_eq!(client.is_paused(), false);
         client.pause(&admin);
         assert_eq!(client.is_paused(), true);
-        let err = client.try_set_oracle(&oracle).expect_err("should be blocked");
+        let err = client.try_set_oracle(&admin, &oracle).expect_err("should be blocked");
         assert_eq!(err, Ok(PredictXError::EmergencyWithdrawNotAllowed));
         client.unpause(&admin);
         assert_eq!(client.is_paused(), false);
@@ -564,8 +593,7 @@ mod test {
 
     #[test]
     fn emergency_withdraw_on_cancelled_poll_refunds_stake() {
-        let (env, admin, oracle_id, contract_id, client) = setup_emergency_env();
-        let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
+        let (env, admin, _oracle_id, contract_id, client) = setup_emergency_env();
         let token_addr: Address = env.as_contract(&contract_id, || {
             env.storage().instance().get(&DataKey::TokenAddress).unwrap()
         });
@@ -599,7 +627,7 @@ mod test {
         });
 
         env.ledger().set_timestamp(100);
-        oracle_client.set_poll_status(&5_u64, &voting_oracle::PollStatus::Disputed);
+        oracle_client.set_poll_status(&_admin, &5_u64, &voting_oracle::PollStatus::Disputed);
 
         let user = Address::generate(&env);
         let amount: i128 = 25;
@@ -621,7 +649,7 @@ mod test {
         let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
 
         env.ledger().set_timestamp(200);
-        oracle_client.set_poll_status(&2_u64, &voting_oracle::PollStatus::Locked);
+        oracle_client.set_poll_status(&_admin, &2_u64, &voting_oracle::PollStatus::Locked);
 
         let user = Address::generate(&env);
         let stake = Stake { user: user.clone(), poll_id: 2, amount: 30, side: StakeSide::Yes, claimed: false, staked_at: env.ledger().timestamp() };
@@ -643,7 +671,7 @@ mod test {
         });
 
         env.ledger().set_timestamp(300);
-        oracle_client.set_poll_status(&3_u64, &voting_oracle::PollStatus::Disputed);
+        oracle_client.set_poll_status(&_admin, &3_u64, &voting_oracle::PollStatus::Disputed);
 
         let user = Address::generate(&env);
         let amount: i128 = 40;
@@ -658,5 +686,72 @@ mod test {
         assert_eq!(refunded, amount);
         let err = client.try_emergency_withdraw(&user, &3_u64).expect_err("double withdrawal should fail");
         assert_eq!(err, Ok(PredictXError::AlreadyClaimed));
+    }
+
+    #[test]
+    fn super_admin_can_manage_admins_and_admin_can_pause() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let super_admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let tok = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&super_admin, &oracle, &tok, &treasury, &TEST_FEE_BPS);
+
+        let admin = Address::generate(&env);
+        client.add_admin(&super_admin, &admin);
+        assert!(client.is_admin(&admin));
+        client.pause(&admin);
+        assert!(client.is_paused());
+
+        client.remove_admin(&super_admin, &admin);
+        assert!(!client.is_admin(&admin));
+        let err = client.try_unpause(&admin).expect_err("removed admin cannot unpause");
+        assert_eq!(err, Ok(PredictXError::Unauthorized));
+    }
+
+    #[test]
+    fn non_super_admin_cannot_add_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let super_admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let tok = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&super_admin, &oracle, &tok, &treasury, &TEST_FEE_BPS);
+
+        let attacker = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let err = client
+            .try_add_admin(&attacker, &new_admin)
+            .expect_err("unauthorized add should fail");
+        assert_eq!(err, Ok(PredictXError::Unauthorized));
+    }
+
+    #[test]
+    fn two_step_super_admin_transfer_works() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let super_admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let tok = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&super_admin, &oracle, &tok, &treasury, &TEST_FEE_BPS);
+
+        let next_super_admin = Address::generate(&env);
+        client.propose_super_admin_transfer(&super_admin, &next_super_admin);
+        client.accept_super_admin_transfer(&next_super_admin);
+        assert_eq!(client.get_super_admin(), next_super_admin);
+
+        let err = client
+            .try_add_admin(&super_admin, &Address::generate(&env))
+            .expect_err("old super admin should lose privileges");
+        assert_eq!(err, Ok(PredictXError::Unauthorized));
     }
 }
