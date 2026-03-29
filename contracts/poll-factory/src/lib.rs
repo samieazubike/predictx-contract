@@ -1,6 +1,11 @@
 #![no_std]
 
-use predictx_shared::{PredictXError, Poll, PollCategory, PollStatus};
+use predictx_shared::{
+    add_admin as shared_add_admin, get_admins as shared_get_admins,
+    get_super_admin as shared_get_super_admin, is_admin as shared_is_admin,
+    remove_admin as shared_remove_admin,
+    DataKey as SharedDataKey, PredictXError, Poll, PollCategory, PollStatus,
+};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
 
 #[contract]
@@ -15,10 +20,7 @@ enum DataKey {
 }
 
 fn get_admin(env: &Env) -> Result<Address, PredictXError> {
-    env.storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(PredictXError::NotInitialized)
+    shared_get_super_admin(env)
 }
 
 fn next_poll_id(env: &Env) -> u64 {
@@ -40,12 +42,34 @@ impl PollFactory {
 
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&SharedDataKey::SuperAdmin, &admin);
+        env.storage().instance().set(&SharedDataKey::AdminList, &soroban_sdk::Vec::<Address>::new(&env));
         env.storage().instance().set(&DataKey::NextPollId, &1_u64);
         Ok(())
     }
 
     pub fn admin(env: Env) -> Result<Address, PredictXError> {
         get_admin(&env)
+    }
+
+    pub fn get_super_admin(env: Env) -> Result<Address, PredictXError> {
+        shared_get_super_admin(&env)
+    }
+
+    pub fn get_admins(env: Env) -> soroban_sdk::Vec<Address> {
+        shared_get_admins(&env)
+    }
+
+    pub fn is_admin(env: Env, address: Address) -> Result<bool, PredictXError> {
+        shared_is_admin(&env, &address)
+    }
+
+    pub fn add_admin(env: Env, super_admin: Address, new_admin: Address) -> Result<(), PredictXError> {
+        shared_add_admin(&env, &super_admin, new_admin)
+    }
+
+    pub fn remove_admin(env: Env, super_admin: Address, admin_to_remove: Address) -> Result<(), PredictXError> {
+        shared_remove_admin(&env, &super_admin, admin_to_remove)
     }
 
     pub fn create_poll(
@@ -121,5 +145,25 @@ mod test {
         assert_eq!(poll.question, question);
         assert_eq!(poll.status, PollStatus::Active);
         assert_eq!(poll.lock_time, 123_u64);
+    }
+
+    #[test]
+    fn only_super_admin_can_manage_admins() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PollFactory, ());
+        let client = PollFactoryClient::new(&env, &contract_id);
+
+        let super_admin = Address::generate(&env);
+        client.initialize(&super_admin);
+        let attacker = Address::generate(&env);
+        let admin = Address::generate(&env);
+
+        let err = client
+            .try_add_admin(&attacker, &admin)
+            .expect_err("only super admin can add");
+        assert_eq!(err, Ok(PredictXError::Unauthorized));
+        client.add_admin(&super_admin, &admin);
+        assert!(client.is_admin(&admin));
     }
 }

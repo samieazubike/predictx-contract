@@ -1,21 +1,6 @@
 use soroban_sdk::{Address, Env, String, Symbol, Vec};
-use predictx_shared::{Match, PredictXError};
+use predictx_shared::{require_admin, Match, PredictXError};
 use crate::DataKey;   // ← uses prediction-market's local DataKey, not shared one
-
-// ── Internal helper ───────────────────────────────────────────────────────────
-
-pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PredictXError> {
-    caller.require_auth();
-    let admin: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(PredictXError::NotInitialized)?;
-    if *caller != admin {
-        return Err(PredictXError::Unauthorized);
-    }
-    Ok(())
-}
 
 // ── Match functions ───────────────────────────────────────────────────────────
 

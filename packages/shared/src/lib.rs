@@ -1,11 +1,13 @@
 #![no_std]
 
 pub mod constants;
+pub mod access;
 pub mod errors;
 pub mod storage;
 pub mod types;
 
 pub use constants::*;
+pub use access::*;
 pub use errors::PredictXError;
 pub use storage::DataKey;
 pub use types::*;

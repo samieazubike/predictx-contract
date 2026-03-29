@@ -9,8 +9,14 @@ use soroban_sdk::{contracttype, Address};
 #[contracttype]
 pub enum DataKey {
     // ── Instance storage ──────────────────────────────────────────────────────
+    /// Super admin `Address`. (Instance)
+    SuperAdmin,
+    /// Pending super admin `Address` for 2-step transfer. (Instance)
+    PendingSuperAdmin,
     /// Admin `Address`. (Instance)
     Admin,
+    /// Oracle contract `Address`. (Instance)
+    OracleAddress,
     /// Soroban token contract `Address` used for staking. (Instance)
     TokenAddress,
     /// Platform fee in basis points. (Instance)
