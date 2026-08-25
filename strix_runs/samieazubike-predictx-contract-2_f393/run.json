@@ -1,0 +1,56 @@
+{
+  "run_id": "samieazubike-predictx-contract-2_f393",
+  "run_name": "samieazubike-predictx-contract-2_f393",
+  "start_time": "2026-08-25T02:27:32.528926+00:00",
+  "end_time": "2026-08-25T02:27:38.088618+00:00",
+  "status": "failed",
+  "auth_mode": "api_key",
+  "targets_info": [
+    {
+      "type": "local_code",
+      "details": {
+        "target_path": "/mnt/c/MikoBuild/workspaces/bounty_hunter_editable/samieazubike__predictx-contract__22__df766c3774__issue_22__ab9b57a1f2",
+        "workspace_subdir": "samieazubike__predictx-contract__22__df766c3774__issue_22__ab9b57a1f2"
+      },
+      "original": "/mnt/c/MikoBuild/workspaces/bounty_hunter_editable/samieazubike__predictx-contract__22__df766c3774__issue_22__ab9b57a1f2"
+    }
+  ],
+  "llm_usage": {
+    "requests": 0,
+    "input_tokens": 0,
+    "input_tokens_details": [
+      {
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
+      }
+    ],
+    "output_tokens": 0,
+    "output_tokens_details": [
+      {
+        "reasoning_tokens": 0
+      }
+    ],
+    "total_tokens": 0,
+    "request_usage_entries": [],
+    "cost": 0.0,
+    "agents": []
+  },
+  "scan_mode": "quick",
+  "instruction": "",
+  "user_instruction": null,
+  "non_interactive": true,
+  "local_sources": [
+    {
+      "source_path": "/mnt/c/MikoBuild/workspaces/bounty_hunter_editable/samieazubike__predictx-contract__22__df766c3774__issue_22__ab9b57a1f2",
+      "workspace_subdir": "samieazubike__predictx-contract__22__df766c3774__issue_22__ab9b57a1f2",
+      "protect_metadata": true
+    }
+  ],
+  "workspace_mount": null,
+  "diff_scope": {
+    "active": false,
+    "mode": "auto"
+  },
+  "scope_mode": "auto",
+  "diff_base": null
+}

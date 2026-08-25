@@ -1,0 +1,16 @@
+2026-08-25 09:27:34.643 INFO    samieazubike-predictx-contract-2_f393 - strix.core.runner: Starting Strix scan samieazubike-predictx-contract-2_f393 (image=ghcr.io/usestrix/strix-sandbox:1.3.0, max_turns=10, interactive=False, run_dir=/mnt/c/MikoBuild/workspaces/bounty_hunter_editable/samieazubike__predictx-contract__22__df766c3774__issue_22__ab9b57a1f2/strix_runs/samieazubike-predictx-contract-2_f393)
+2026-08-25 09:27:34.644 INFO    samieazubike-predictx-contract-2_f393 - strix.core.runner: LLM model resolved: ollama/qwen3:8b
+2026-08-25 09:27:34.645 INFO    samieazubike-predictx-contract-2_f393 - strix.core.runner: Bringing up sandbox session for scan samieazubike-predictx-contract-2_f393
+2026-08-25 09:27:34.646 DEBUG   samieazubike-predictx-contract-2_f393 - strix.runtime.backends: Selected sandbox backend: docker
+2026-08-25 09:27:34.651 INFO    samieazubike-predictx-contract-2_f393 - strix.runtime.session_manager: Creating sandbox session for scan samieazubike-predictx-contract-2_f393 (backend=docker, image=ghcr.io/usestrix/strix-sandbox:1.3.0)
+2026-08-25 09:27:34.798 DEBUG   samieazubike-predictx-contract-2_f393 - strix.runtime.docker_client: Creating sandbox container: image=ghcr.io/usestrix/strix-sandbox:1.3.0 caps=['NET_ADMIN', 'NET_RAW'] exposed_ports=[48080]
+2026-08-25 09:27:34.955 INFO    samieazubike-predictx-contract-2_f393 - strix.runtime.docker_client: Sandbox container created: id=0d192d160d6b image=ghcr.io/usestrix/strix-sandbox:1.3.0
+2026-08-25 09:27:36.634 DEBUG   samieazubike-predictx-contract-2_f393 - strix.runtime.session_manager: cleanup(samieazubike-predictx-contract-2_f393): no cached session
+2026-08-25 09:27:37.411 DEBUG   - - strix.telemetry.posthog: posthog event sent: error
+2026-08-25 09:27:38.087 DEBUG   - - strix.telemetry.scarf: scarf event sent: error
+2026-08-25 09:27:38.093 INFO    - - strix.report.sarif: Wrote SARIF 2.1.0 report: /mnt/c/MikoBuild/workspaces/bounty_hunter_editable/samieazubike__predictx-contract__22__df766c3774__issue_22__ab9b57a1f2/strix_runs/samieazubike-predictx-contract-2_f393/findings.sarif (0 results)
+2026-08-25 09:27:38.098 INFO    - - strix.report.state: Essential scan data saved to: /mnt/c/MikoBuild/workspaces/bounty_hunter_editable/samieazubike__predictx-contract__22__df766c3774__issue_22__ab9b57a1f2/strix_runs/samieazubike-predictx-contract-2_f393
+2026-08-25 09:27:38.908 DEBUG   - - strix.telemetry.posthog: posthog event sent: scan_ended
+2026-08-25 09:27:39.611 DEBUG   - - strix.telemetry.scarf: scarf event sent: scan_ended
+2026-08-25 09:27:39.624 INFO    - - strix.report.sarif: Wrote SARIF 2.1.0 report: /mnt/c/MikoBuild/workspaces/bounty_hunter_editable/samieazubike__predictx-contract__22__df766c3774__issue_22__ab9b57a1f2/strix_runs/samieazubike-predictx-contract-2_f393/findings.sarif (0 results)
+2026-08-25 09:27:39.628 INFO    - - strix.report.state: Essential scan data saved to: /mnt/c/MikoBuild/workspaces/bounty_hunter_editable/samieazubike__predictx-contract__22__df766c3774__issue_22__ab9b57a1f2/strix_runs/samieazubike-predictx-contract-2_f393
