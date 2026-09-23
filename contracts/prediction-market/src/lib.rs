@@ -1,6 +1,7 @@
 #![no_std]
 
 mod matches;
+mod payouts;
 mod staking;
 pub(crate) mod token_utils;
 
