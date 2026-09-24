@@ -3,7 +3,21 @@ use predictx_shared::{
     PollStatus, PredictXError, VoteChoice, VoteTally, AUTO_RESOLVE_THRESHOLD_BPS, BPS_DENOMINATOR,
     VOTING_WINDOW_SECS,
 };
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{Address, Env, IntoVal, Symbol};
+
+fn has_user_staked(env: &Env, poll_id: u64, voter: &Address) -> Result<bool, PredictXError> {
+    let prediction_market: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::PredictionMarket)
+        .ok_or(PredictXError::NotInitialized)?;
+
+    Ok(env.invoke_contract(
+        &prediction_market,
+        &Symbol::new(env, "has_user_staked"),
+        (poll_id, voter.clone()).into_val(env),
+    ))
+}
 
 /// Record a voter's choice on a poll.
 ///
@@ -16,8 +30,6 @@ use soroban_sdk::{Address, Env, Symbol};
 /// 5. Persists the updated tally and the per-voter dedup marker, and returns
 ///    the tally.
 ///
-/// Out of scope for this change (tracked in separate issues): excluding stakers.
-pub fn cast_vote(
     env: &Env,
     voter: Address,
     poll_id: u64,
@@ -43,6 +55,10 @@ pub fn cast_vote(
     // Each address may vote at most once per poll.
     if storage::has_voted(env, poll_id, &voter) {
         return Err(PredictXError::AlreadyVoted);
+    }
+
+    if has_user_staked(env, poll_id, &voter)? {
+        return Err(PredictXError::VoterIsStaker);
     }
 
     // ── Effects ───────────────────────────────────────────────────────────────
@@ -171,9 +187,34 @@ mod test {
 
     use predictx_shared::{PollStatus, PredictXError, VoteChoice, VOTING_WINDOW_SECS};
     use soroban_sdk::{
+        contract, contractimpl, contracttype,
         testutils::{Address as _, Ledger},
         Address, Env,
     };
+
+    #[contract]
+    struct TestPredictionMarket;
+
+    #[contracttype]
+    enum TestDataKey {
+        Staked(Address),
+    }
+
+    #[contractimpl]
+    impl TestPredictionMarket {
+        pub fn set_staked(env: Env, user: Address, staked: bool) {
+            env.storage()
+                .instance()
+                .set(&TestDataKey::Staked(user), &staked);
+        }
+
+        pub fn has_user_staked(env: Env, _poll_id: u64, user: Address) -> bool {
+            env.storage()
+                .instance()
+                .get(&TestDataKey::Staked(user))
+                .unwrap_or(false)
+        }
+    }
 
     use crate::{VotingOracle, VotingOracleClient};
 
@@ -185,6 +226,8 @@ mod test {
         let admin = Address::generate(&env);
 
         client.initialize(&admin);
+        let prediction_market_id = env.register(TestPredictionMarket, ());
+        client.set_prediction_market(&prediction_market_id);
         env.ledger().with_mut(|l| l.timestamp = 1_000_000);
 
         // Register poll 1 as a known poll. `initiate_voting` (#80) will later
@@ -209,6 +252,34 @@ mod test {
         assert_eq!(tally.no_votes, 0);
         assert_eq!(tally.unclear_votes, 0);
         assert_eq!(tally.total_voters, 1);
+    }
+
+    #[test]
+    fn cast_vote_rejects_staker() {
+        let (env, _admin, client) = setup();
+        let prediction_market_id = env.register(TestPredictionMarket, ());
+        client.set_prediction_market(&prediction_market_id);
+        let prediction_market =
+            TestPredictionMarketClient::new(&env, &prediction_market_id);
+        let staker = voter(&env);
+        prediction_market.set_staked(&staker, &true);
+
+        let err = client
+            .try_cast_vote(&staker, &1_u64, &VoteChoice::Yes)
+            .expect_err("stakers must not vote on their own poll");
+
+        assert_eq!(err, Ok(PredictXError::VoterIsStaker));
+    }
+
+    #[test]
+    fn cast_vote_allows_configured_prediction_market_non_staker() {
+        let (env, _admin, client) = setup();
+        let non_staker = voter(&env);
+
+        let tally = client.cast_vote(&non_staker, &1_u64, &VoteChoice::Yes);
+
+        assert_eq!(tally.total_voters, 1);
+        assert_eq!(tally.yes_votes, 1);
     }
 
     #[test]
