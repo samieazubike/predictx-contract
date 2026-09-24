@@ -1,24 +1,23 @@
 #![no_std]
 
-mod storage;
-mod voting;
-
-use predictx_shared::{PollStatus, PredictXError, VoteChoice, VoteTally};
+use predictx_shared::{PredictXError, PollStatus, VoteTally};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
+
+mod voting;
 
 #[contract]
 pub struct VotingOracle;
 
 #[contracttype]
 #[derive(Clone)]
-struct StoredPollStatus {
-    status: PollStatus,
-    updated_at: u64,
+pub(crate) struct StoredPollStatus {
+    pub(crate) status: PollStatus,
+    pub(crate) updated_at: u64,
 }
 
 #[contracttype]
 #[derive(Clone)]
-enum DataKey {
+pub(crate) enum DataKey {
     Admin,
     PollStatus(u64),
     /// `poll_id` → vote tally. (Temporary — only needed during the voting window)
@@ -92,6 +91,12 @@ impl VotingOracle {
         stored.map(|s| s.updated_at).unwrap_or(0)
     }
 
+    pub fn process_tally(env: Env, tally: VoteTally) -> Result<(), PredictXError> {
+        let admin = get_admin(&env)?;
+        admin.require_auth();
+
+        voting::process_tally(&env, &tally);
+        Ok(())
     /// Record a voter's choice on a poll.
     pub fn cast_vote(
         env: Env,
