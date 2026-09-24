@@ -20,6 +20,10 @@ pub(crate) struct StoredPollStatus {
 pub(crate) enum DataKey {
     Admin,
     PollStatus(u64),
+    /// `poll_id` → vote tally. (Temporary — only needed during the voting window)
+    VoteTally(u64),
+    /// `(poll_id, voter)` → `bool` — has this voter cast a vote? (Temporary)
+    HasVoted(u64, Address),
 }
 
 fn get_admin(env: &Env) -> Result<Address, PredictXError> {
@@ -49,7 +53,11 @@ impl VotingOracle {
     ///
     /// This exists only to validate cross-contract invocation patterns during
     /// Phase 1 scaffolding.
-    pub fn set_poll_status(env: Env, poll_id: u64, status: PollStatus) -> Result<(), PredictXError> {
+    pub fn set_poll_status(
+        env: Env,
+        poll_id: u64,
+        status: PollStatus,
+    ) -> Result<(), PredictXError> {
         let admin = get_admin(&env)?;
         admin.require_auth();
 
@@ -89,6 +97,14 @@ impl VotingOracle {
 
         voting::process_tally(&env, &tally);
         Ok(())
+    /// Record a voter's choice on a poll.
+    pub fn cast_vote(
+        env: Env,
+        voter: Address,
+        poll_id: u64,
+        choice: VoteChoice,
+    ) -> Result<VoteTally, PredictXError> {
+        voting::cast_vote(&env, voter, poll_id, choice)
     }
 }
 
