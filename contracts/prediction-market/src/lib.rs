@@ -1,6 +1,7 @@
 #![no_std]
 
 mod matches;
+mod payouts;
 mod staking;
 pub(crate) mod token_utils;
 
@@ -358,6 +359,14 @@ impl PredictionMarket {
 
     pub fn get_pool_info(env: Env, poll_id: u64) -> Result<PoolInfo, PredictXError> {
         staking::get_pool_info(&env, poll_id)
+    }
+
+    /// Read-only view: return the token amount that `claim_winnings` would
+    /// transfer to `user` for the given poll.  Returns `0` for every
+    /// ineligible case (unresolved poll, non-staker, losing staker,
+    /// already-claimed) rather than erroring.  No `require_auth` — public.
+    pub fn get_claimable_amount(env: Env, poll_id: u64, user: Address) -> i128 {
+        payouts::get_claimable_amount(&env, poll_id, &user)
     }
 
     pub fn get_platform_stats(env: Env) -> PlatformStats {
