@@ -72,4 +72,6 @@ pub enum PredictXError {
     ContractPaused = 33,
     /// Stake amount is below the minimum required.
     StakeBelowMinimum = 34,
+    /// Evidence string is invalid or empty.
+    InvalidEvidence = 35,
 }
