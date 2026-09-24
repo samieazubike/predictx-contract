@@ -2,6 +2,7 @@
 
 mod matches;
 mod staking;
+mod payouts;
 pub(crate) mod token_utils;
 
 use predictx_shared::{
@@ -41,6 +42,8 @@ pub enum DataKey {
     PlatformFeeBps,
     Stake(u64, Address),
     EmergencyClaimed(u64, Address),
+    /// Set once the platform fee for a poll has been sent to the treasury.
+    FeePaid(u64),
     PlatformStats,
     // ── match management keys ─────────────────────────────────────────────────
     Initialized,
@@ -358,6 +361,12 @@ impl PredictionMarket {
 
     pub fn get_pool_info(env: Env, poll_id: u64) -> Result<PoolInfo, PredictXError> {
         staking::get_pool_info(&env, poll_id)
+    }
+
+    /// Claim winnings for a resolved poll. Routes the platform fee to the
+    /// treasury on the first claim (`FeePaid` marker).
+    pub fn claim_winnings(env: Env, user: Address, poll_id: u64) -> Result<i128, PredictXError> {
+        payouts::claim_winnings(&env, user, poll_id)
     }
 
     pub fn get_platform_stats(env: Env) -> PlatformStats {
