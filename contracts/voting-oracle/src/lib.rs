@@ -3,19 +3,22 @@
 use predictx_shared::{PredictXError, PollStatus};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
+pub mod voting;
+
 #[contract]
 pub struct VotingOracle;
 
 #[contracttype]
 #[derive(Clone)]
-struct StoredPollStatus {
-    status: PollStatus,
-    updated_at: u64,
+pub(crate) struct StoredPollStatus {
+    pub status: PollStatus,
+    pub updated_at: u64,
+    pub provisional_outcome: Option<bool>,
 }
 
 #[contracttype]
 #[derive(Clone)]
-enum DataKey {
+pub(crate) enum DataKey {
     Admin,
     PollStatus(u64),
     Evidence(u64),
@@ -55,6 +58,7 @@ impl VotingOracle {
         let stored = StoredPollStatus {
             status,
             updated_at: env.ledger().timestamp(),
+            provisional_outcome: None,
         };
 
         env.storage()
