@@ -38,6 +38,10 @@ enum DataKey {
     Voters(u64),
     /// `(poll_id, voter)` → `bool` — has this voter cast a vote? (Temporary)
     HasVoted(u64, Address),
+    /// Soroban token contract used to pay out voter rewards. (Instance)
+    TokenAddress,
+    /// `(poll_id, voter)` → `bool` — has this voter claimed their reward? (Persistent)
+    RewardClaimed(u64, Address),
 }
 
 fn get_admin(env: &Env) -> Result<Address, PredictXError> {
@@ -149,6 +153,28 @@ impl VotingOracle {
         storage::read_admins(&env)
     }
 
+    /// Admin-gated setter for the token contract used to pay voter rewards.
+    pub fn set_token_address(
+        env: Env,
+        admin: Address,
+        token_address: Address,
+    ) -> Result<(), PredictXError> {
+        storage::require_admin(&env, &admin)?;
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::TokenAddress, &token_address);
+        Ok(())
+    }
+
+    /// Returns the stored voter-reward token address.
+    pub fn get_token_address(env: Env) -> Result<Address, PredictXError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::TokenAddress)
+            .ok_or(PredictXError::NotInitialized)
+    }
+
     /// Placeholder oracle state setter.
     ///
     /// This exists only to validate cross-contract invocation patterns during
@@ -205,6 +231,26 @@ impl VotingOracle {
             .persistent()
             .get(&DataKey::PollOutcome(poll_id))
             .ok_or(PredictXError::PollNotFound)
+    }
+
+    /// Claim a voter's share of a resolved poll's reserved reward pool.
+    ///
+    /// Pull-based by design: each voter claims their own equal share instead of
+    /// the contract pushing a payout to every voter at once.
+    pub fn claim_voter_reward(
+        env: Env,
+        voter: Address,
+        poll_id: u64,
+    ) -> Result<i128, PredictXError> {
+        voting::claim_voter_reward(&env, voter, poll_id)
+    }
+
+    /// Preview the reward `voter` could claim for `poll_id`.
+    ///
+    /// Returns `0` for every ineligible case instead of erroring, so the SDK
+    /// can show a claimable amount before the claim is attempted.
+    pub fn get_voter_reward(env: Env, poll_id: u64, voter: Address) -> i128 {
+        voting::get_voter_reward(&env, poll_id, &voter)
     }
 }
 
