@@ -244,6 +244,14 @@ impl VotingOracle {
     ) -> Result<i128, PredictXError> {
         voting::claim_voter_reward(&env, voter, poll_id)
     }
+
+    /// Preview the reward `voter` could claim for `poll_id`.
+    ///
+    /// Returns `0` for every ineligible case instead of erroring, so the SDK
+    /// can show a claimable amount before the claim is attempted.
+    pub fn get_voter_reward(env: Env, poll_id: u64, voter: Address) -> i128 {
+        voting::get_voter_reward(&env, poll_id, &voter)
+    }
 }
 
 #[cfg(test)]

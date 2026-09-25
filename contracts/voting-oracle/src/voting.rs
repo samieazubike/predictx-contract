@@ -199,7 +199,50 @@ pub fn claim_voter_reward(
 
     transfer_from_contract(env, &voter, amount)?;
 
+    // Emitted only once the transfer has actually succeeded, so indexers never
+    // see a reward that was not paid.
+    env.events().publish(
+        (Symbol::new(env, "VoterRewardClaimed"), poll_id, voter),
+        amount,
+    );
+
     Ok(amount)
+}
+
+/// Read-only preview of the reward `voter` could claim for `poll_id`.
+///
+/// Mirrors [`claim_voter_reward`] exactly and returns `0` — never an error —
+/// for every ineligible case: an unknown or unsettled poll, a caller who never
+/// voted, an already-claimed reward, or an empty pool. This lets the SDK treat
+/// it symmetrically with the staker-side claimable view.
+pub fn get_voter_reward(env: &Env, poll_id: u64, voter: &Address) -> i128 {
+    if !env
+        .storage()
+        .persistent()
+        .has(&DataKey::PollStatus(poll_id))
+    {
+        return 0;
+    }
+
+    if crate::read_poll_status(env, poll_id) != PollStatus::Resolved {
+        return 0;
+    }
+
+    let tally = match storage::read_tally(env, poll_id) {
+        Some(tally) => tally,
+        None => return 0,
+    };
+
+    let voters = storage::read_voters(env, poll_id);
+    if !voters.contains(voter.clone()) {
+        return 0;
+    }
+
+    if storage::has_claimed_reward(env, poll_id, voter) {
+        return 0;
+    }
+
+    voter_reward_share(&tally, voters.len())
 }
 
 /// Share of the reserved voter reward pool owed to a single eligible voter.
@@ -660,5 +703,71 @@ mod test {
             .expect_err("second claim must fail");
 
         assert_eq!(tokens.balance(&client.address), balance_after_first_claim);
+    }
+
+    // ── get_voter_reward / VoterRewardClaimed ─────────────────────────────────
+
+    #[test]
+    fn get_voter_reward_matches_the_claim_payout() {
+        let (_env, client, _token_address, voters) = setup_reward_poll(4, 401);
+        let first = voters.get(0).unwrap();
+
+        // floor(401 / 4): the remainder stays in the contract.
+        let preview = client.get_voter_reward(&1_u64, &first);
+        assert_eq!(preview, 100);
+
+        let paid = client.claim_voter_reward(&first, &1_u64);
+        assert_eq!(paid, preview);
+    }
+
+    #[test]
+    fn get_voter_reward_returns_zero_for_ineligible_voters() {
+        let (env, client, _token_address, voters) = setup_reward_poll(2, 200);
+        let voter_zero = voters.get(0).unwrap();
+
+        // Never voted on poll 1.
+        assert_eq!(client.get_voter_reward(&1_u64, &voter(&env)), 0);
+
+        // Unknown poll.
+        assert_eq!(client.get_voter_reward(&999_u64, &voter_zero), 0);
+
+        // A poll that is still open for voting has not settled yet.
+        client.set_poll_status(&2_u64, &PollStatus::Voting);
+        client.cast_vote(&voter_zero, &2_u64, &VoteChoice::Yes);
+        assert_eq!(client.get_voter_reward(&2_u64, &voter_zero), 0);
+    }
+
+    #[test]
+    fn get_voter_reward_returns_zero_after_claim() {
+        let (_env, client, _token_address, voters) = setup_reward_poll(2, 200);
+        let first = voters.get(0).unwrap();
+
+        assert_eq!(client.get_voter_reward(&1_u64, &first), 100);
+
+        client.claim_voter_reward(&first, &1_u64);
+
+        assert_eq!(client.get_voter_reward(&1_u64, &first), 0);
+    }
+
+    #[test]
+    fn claim_voter_reward_emits_event_after_successful_transfer() {
+        use soroban_sdk::{testutils::Events, TryIntoVal};
+
+        let (env, client, _token_address, voters) = setup_reward_poll(2, 200);
+        let first = voters.get(0).unwrap();
+
+        let paid = client.claim_voter_reward(&first, &1_u64);
+
+        let events = env.events().all();
+        let (_, topics, data) = events.get(events.len() - 1).unwrap();
+        let name: soroban_sdk::Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
+        let topic_poll_id: u64 = topics.get(1).unwrap().try_into_val(&env).unwrap();
+        let topic_voter: Address = topics.get(2).unwrap().try_into_val(&env).unwrap();
+        let amount: i128 = data.try_into_val(&env).unwrap();
+
+        assert_eq!(name, soroban_sdk::Symbol::new(&env, "VoterRewardClaimed"));
+        assert_eq!(topic_poll_id, 1);
+        assert_eq!(topic_voter, first);
+        assert_eq!(amount, paid);
     }
 }
