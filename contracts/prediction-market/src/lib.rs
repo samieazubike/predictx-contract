@@ -513,12 +513,12 @@ mod test {
         let admin = Address::generate(&env);
         let oracle_id = env.register(voting_oracle::WASM, ());
         let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
-        oracle_client.initialize(&admin);
+        let tok = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        oracle_client.initialize(&admin, &tok);
         oracle_client.set_poll_status(&7_u64, &voting_oracle::PollStatus::Resolved);
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
-        let tok = Address::generate(&env);
-        let treasury = Address::generate(&env);
         client.initialize(&admin, &oracle_id, &tok, &treasury, &TEST_FEE_BPS);
         let status = client.oracle_poll_status(&7_u64);
         assert_eq!(status, PollStatus::Resolved);
@@ -551,10 +551,10 @@ mod test {
         let admin = Address::generate(&env);
         let oracle_id = env.register(voting_oracle::WASM, ());
         let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
-        oracle_client.initialize(&admin);
+        let tok = Address::generate(&env);
+        oracle_client.initialize(&admin, &tok);
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);
-        let tok = Address::generate(&env);
         let treasury = Address::generate(&env);
         client.initialize(&admin, &oracle_id, &tok, &treasury, &TEST_FEE_BPS);
         client.cancel_poll(&admin, &1_u64);
@@ -567,15 +567,15 @@ mod test {
         env.mock_all_auths();
         let admin = Address::generate(&env);
 
-        let oracle_id = env.register(voting_oracle::WASM, ());
-        let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
-        oracle_client.initialize(&admin);
-
         // Real token for transfers
         let token_admin = Address::generate(&env);
         let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
         let token_addr = token_contract.address();
         let treasury = Address::generate(&env);
+
+        let oracle_id = env.register(voting_oracle::WASM, ());
+        let oracle_client = voting_oracle::Client::new(&env, &oracle_id);
+        oracle_client.initialize(&admin, &token_addr);
 
         let contract_id = env.register(PredictionMarket, ());
         let client = PredictionMarketClient::new(&env, &contract_id);

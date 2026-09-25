@@ -33,3 +33,6 @@ pub const EMERGENCY_TIMEOUT_SECS: u64 = 604_800;
 
 /// Minimum stake amount in token base units. `10_000_000` = 10 tokens (7 decimal places).
 pub const MIN_STAKE_AMOUNT: i128 = 10_000_000;
+
+/// Fixed fee (in token base units) required to initiate a dispute. `1_000_000_000` = 100 tokens.
+pub const DISPUTE_FEE: i128 = 1_000_000_000;
