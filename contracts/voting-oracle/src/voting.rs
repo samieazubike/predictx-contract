@@ -1,9 +1,9 @@
 use crate::{storage, DataKey, MAX_VOTERS};
 use predictx_shared::{
-    PollStatus, PredictXError, VoteChoice, VoteTally, AUTO_RESOLVE_THRESHOLD_BPS, BPS_DENOMINATOR,
-    VOTING_WINDOW_SECS,
+    Dispute, PollStatus, PredictXError, VoteChoice, VoteTally, AUTO_RESOLVE_THRESHOLD_BPS,
+    BPS_DENOMINATOR, DISPUTE_WINDOW_SECS, MULTI_SIG_REQUIRED, VOTING_WINDOW_SECS,
 };
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{Address, Env, String, Symbol};
 
 /// Record a voter's choice on a poll.
 ///
@@ -138,6 +138,83 @@ pub fn auto_resolve(env: &Env, poll_id: u64) -> Result<VoteChoice, PredictXError
     Ok(outcome)
 }
 
+/// Open a dispute against a `Resolved` poll within the dispute window.
+///
+/// Flow (Checks → Effects):
+/// 1. Authenticates the caller as the dispute initiator.
+/// 2. Verifies the poll is known, else `PollNotFound`.
+/// 3. Requires the poll to be `Resolved`, else `PollNotActive` — an unresolved
+///    poll has no outcome to dispute.
+/// 4. Rejects a poll that already has an open dispute, else `DisputeAlreadyOpen`.
+/// 5. Rejects a dispute raised more than [`DISPUTE_WINDOW_SECS`] after the poll
+///    resolved, else `DisputeWindowClosed`.
+/// 6. Stores the [`Dispute`] record, moves the poll to `PollStatus::Disputed`,
+///    and emits `DisputeInitiated`.
+///
+/// The dispute fee is deliberately not handled here; it is tracked separately.
+pub fn initiate_dispute(
+    env: &Env,
+    initiator: Address,
+    poll_id: u64,
+    evidence_hash: String,
+) -> Result<(), PredictXError> {
+    initiator.require_auth();
+
+    if !env
+        .storage()
+        .persistent()
+        .has(&DataKey::PollStatus(poll_id))
+    {
+        return Err(PredictXError::PollNotFound);
+    }
+
+    if crate::read_poll_status(env, poll_id) != PollStatus::Resolved {
+        return Err(PredictXError::PollNotActive);
+    }
+
+    if let Some(existing) = storage::read_dispute(env, poll_id) {
+        if !existing.resolved {
+            return Err(PredictXError::DisputeAlreadyOpen);
+        }
+    }
+
+    let resolution_time = crate::read_poll_status_updated_at(env, poll_id);
+    let deadline = resolution_time
+        .checked_add(DISPUTE_WINDOW_SECS)
+        .unwrap_or(u64::MAX);
+    let now = env.ledger().timestamp();
+    if now > deadline {
+        return Err(PredictXError::DisputeWindowClosed);
+    }
+
+    let dispute = Dispute {
+        poll_id,
+        initiator: initiator.clone(),
+        evidence_hash: evidence_hash.clone(),
+        dispute_fee: 0,
+        admin_approvals: 0,
+        required_approvals: MULTI_SIG_REQUIRED,
+        resolved: false,
+        initiated_at: now,
+    };
+    storage::write_dispute(env, &dispute);
+
+    let stored_status = crate::StoredPollStatus {
+        status: PollStatus::Disputed,
+        updated_at: now,
+    };
+    env.storage()
+        .persistent()
+        .set(&DataKey::PollStatus(poll_id), &stored_status);
+
+    env.events().publish(
+        (Symbol::new(env, "DisputeInitiated"), poll_id, initiator),
+        evidence_hash,
+    );
+
+    Ok(())
+}
+
 /// Share of the decisive (Yes/No) votes held by the leading outcome.
 ///
 /// Returns `(leading_is_yes, share_bps)`, where `share_bps` is rounded down
@@ -179,7 +256,7 @@ mod test {
     use predictx_shared::{PollStatus, PredictXError, VoteChoice, VOTING_WINDOW_SECS};
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
-        Address, Env,
+        Address, Env, String,
     };
 
     use crate::{VotingOracle, VotingOracleClient, MAX_VOTERS};
@@ -484,5 +561,66 @@ mod test {
     #[test]
     fn consensus_bps_tie_favours_yes() {
         assert_eq!(super::consensus_bps(&tally(10, 10, 3)), (true, 5_000));
+    }
+
+    // ── dispute window ───────────────────────────────────────────────────────
+
+    #[test]
+    fn dispute_within_window_is_accepted() {
+        let (env, _admin, client) = setup();
+        // Poll 1 resolves at the current ledger time (1_000_000).
+        client.set_poll_status(&1_u64, &PollStatus::Resolved);
+        let initiator = Address::generate(&env);
+
+        env.ledger().set_timestamp(1_000_000 + 23 * 60 * 60);
+        client.initiate_dispute(
+            &initiator,
+            &1_u64,
+            &String::from_str(&env, "ipfs://evidence"),
+        );
+
+        assert_eq!(client.get_poll_status(&1_u64), PollStatus::Disputed);
+
+        let dispute = client.get_dispute(&1_u64);
+        assert_eq!(dispute.poll_id, 1);
+        assert_eq!(dispute.initiator, initiator);
+        assert!(!dispute.resolved);
+    }
+
+    #[test]
+    fn dispute_after_window_is_rejected() {
+        let (env, _admin, client) = setup();
+        client.set_poll_status(&1_u64, &PollStatus::Resolved);
+        let initiator = Address::generate(&env);
+
+        env.ledger().set_timestamp(1_000_000 + 25 * 60 * 60);
+        let err = client
+            .try_initiate_dispute(
+                &initiator,
+                &1_u64,
+                &String::from_str(&env, "too late"),
+            )
+            .expect_err("a dispute after the 24-hour window must be rejected");
+
+        assert_eq!(err, Ok(PredictXError::DisputeWindowClosed));
+        assert_eq!(client.get_poll_status(&1_u64), PollStatus::Resolved);
+    }
+
+    #[test]
+    fn dispute_against_unresolved_poll_is_rejected() {
+        let (env, _admin, client) = setup();
+        let initiator = Address::generate(&env);
+
+        // `setup` leaves poll 1 in `Voting` — there is no outcome to dispute.
+        let err = client
+            .try_initiate_dispute(
+                &initiator,
+                &1_u64,
+                &String::from_str(&env, "premature"),
+            )
+            .expect_err("an unresolved poll cannot be disputed");
+
+        assert_eq!(err, Ok(PredictXError::PollNotActive));
+        assert_eq!(client.get_poll_status(&1_u64), PollStatus::Voting);
     }
 }
