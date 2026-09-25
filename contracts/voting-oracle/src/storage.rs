@@ -84,3 +84,27 @@ pub fn write_voted(env: &Env, poll_id: u64, voter: &Address) {
         .temporary()
         .set(&DataKey::HasVoted(poll_id, voter.clone()), &true);
 }
+
+// ── Voter-reward claim storage ───────────────────────────────────────────────
+
+/// Whether `voter` has already claimed their reward for `poll_id`.
+///
+/// Reward claims outlive the voting window, so the marker is *persistent*
+/// rather than temporary (unlike the vote-dedup marker above).
+pub fn has_claimed_reward(env: &Env, poll_id: u64, voter: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::RewardClaimed(poll_id, voter.clone()))
+        .unwrap_or(false)
+}
+
+/// Record that `voter` has claimed their reward for `poll_id`.
+///
+/// Written *before* the token transfer (checks-effects-interactions) so a
+/// repeated or re-entrant claim cannot pass the entry check and drain the
+/// reward pool.
+pub fn write_reward_claimed(env: &Env, poll_id: u64, voter: &Address) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::RewardClaimed(poll_id, voter.clone()), &true);
+}
