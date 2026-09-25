@@ -1,5 +1,5 @@
 use crate::DataKey;
-use predictx_shared::{PredictXError, VoteTally};
+use predictx_shared::{PredictXError, VoteChoice, VoteTally};
 use soroban_sdk::{Address, Env, Vec};
 
 // ── Admin registry storage ────────────────────────────────────────────────────
@@ -83,4 +83,21 @@ pub fn write_voted(env: &Env, poll_id: u64, voter: &Address) {
     env.storage()
         .temporary()
         .set(&DataKey::HasVoted(poll_id, voter.clone()), &true);
+}
+
+// ── Dispute approval storage ──────────────────────────────────────────────────
+
+/// Admin approvals recorded for resolving `poll_id` to `outcome`.
+pub fn read_dispute_approvals(env: &Env, poll_id: u64, outcome: VoteChoice) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::DisputeApprovals(poll_id, outcome))
+        .unwrap_or(0)
+}
+
+/// Persist the approval count for resolving `poll_id` to `outcome`.
+pub fn write_dispute_approvals(env: &Env, poll_id: u64, outcome: VoteChoice, approvals: u32) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::DisputeApprovals(poll_id, outcome), &approvals);
 }

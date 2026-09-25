@@ -38,6 +38,9 @@ enum DataKey {
     Voters(u64),
     /// `(poll_id, voter)` → `bool` — has this voter cast a vote? (Temporary)
     HasVoted(u64, Address),
+    /// `(poll_id, outcome)` → admin approvals recorded for resolving a
+    /// disputed poll to `outcome`.
+    DisputeApprovals(u64, VoteChoice),
 }
 
 fn get_admin(env: &Env) -> Result<Address, PredictXError> {
@@ -205,6 +208,34 @@ impl VotingOracle {
             .persistent()
             .get(&DataKey::PollOutcome(poll_id))
             .ok_or(PredictXError::PollNotFound)
+    }
+
+    /// Record an admin approval toward resolving a `Disputed` poll.
+    ///
+    /// The poll resolves to `outcome` once [`predictx_shared::MULTI_SIG_REQUIRED`]
+    /// agreeing approvals have been recorded.
+    pub fn approve_dispute(
+        env: Env,
+        admin: Address,
+        poll_id: u64,
+        outcome: VoteChoice,
+    ) -> Result<PollStatus, PredictXError> {
+        voting::approve_dispute(&env, admin, poll_id, outcome)
+    }
+
+    /// Resolve a `Disputed` poll once the multi-sig approval threshold is met.
+    pub fn resolve_dispute(
+        env: Env,
+        admin: Address,
+        poll_id: u64,
+        outcome: VoteChoice,
+    ) -> Result<VoteChoice, PredictXError> {
+        voting::resolve_dispute(&env, admin, poll_id, outcome)
+    }
+
+    /// Number of admin approvals recorded for resolving `poll_id` to `outcome`.
+    pub fn get_dispute_approvals(env: Env, poll_id: u64, outcome: VoteChoice) -> u32 {
+        storage::read_dispute_approvals(&env, poll_id, outcome)
     }
 }
 
