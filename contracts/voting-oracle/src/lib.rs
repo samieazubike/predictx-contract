@@ -187,8 +187,14 @@ impl VotingOracle {
         voting::cast_vote(&env, voter, poll_id, choice)
     }
 
-    pub fn auto_resolve(env: Env, poll_id: u64) -> Result<VoteChoice, PredictXError> {
-        voting::auto_resolve(&env, poll_id)
+    /// Resolve a poll once consensus is reached, reserving the voter reward
+    /// pool (`total_pool * VOTER_REWARD_BPS / 10_000`) in the tally.
+    pub fn auto_resolve(
+        env: Env,
+        poll_id: u64,
+        total_pool: i128,
+    ) -> Result<VoteChoice, PredictXError> {
+        voting::auto_resolve(&env, poll_id, total_pool)
     }
 
     pub fn get_poll_outcome(env: Env, poll_id: u64) -> Result<VoteChoice, PredictXError> {
