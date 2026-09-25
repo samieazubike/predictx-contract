@@ -38,6 +38,10 @@ enum DataKey {
     Voters(u64),
     /// `(poll_id, voter)` → `bool` — has this voter cast a vote? (Temporary)
     HasVoted(u64, Address),
+    /// `(poll_id, admin)` → `VoteChoice` — outcome approved by admin. (Persistent)
+    Approval(u64, Address),
+    /// `poll_id` → `u32` approval count. (Persistent)
+    ApprovalCount(u64),
 }
 
 fn get_admin(env: &Env) -> Result<Address, PredictXError> {
@@ -205,6 +209,26 @@ impl VotingOracle {
             .persistent()
             .get(&DataKey::PollOutcome(poll_id))
             .ok_or(PredictXError::PollNotFound)
+    }
+
+    /// Record an admin's approval of an outcome for a contested poll.
+    pub fn approve(
+        env: Env,
+        admin: Address,
+        poll_id: u64,
+        outcome: VoteChoice,
+    ) -> Result<(), PredictXError> {
+        voting::approve(&env, admin, poll_id, outcome)
+    }
+
+    /// Read the total number of admin approvals for `poll_id`.
+    pub fn get_approval_count(env: Env, poll_id: u64) -> u32 {
+        storage::read_approval_count(&env, poll_id)
+    }
+
+    /// Read the outcome approved by `admin` for `poll_id`, if any.
+    pub fn get_approval(env: Env, poll_id: u64, admin: Address) -> Option<VoteChoice> {
+        storage::read_approval(&env, poll_id, &admin)
     }
 }
 

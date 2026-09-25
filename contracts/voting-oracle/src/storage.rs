@@ -1,5 +1,5 @@
 use crate::DataKey;
-use predictx_shared::{PredictXError, VoteTally};
+use predictx_shared::{PredictXError, VoteChoice, VoteTally};
 use soroban_sdk::{Address, Env, Vec};
 
 // ── Admin registry storage ────────────────────────────────────────────────────
@@ -84,3 +84,42 @@ pub fn write_voted(env: &Env, poll_id: u64, voter: &Address) {
         .temporary()
         .set(&DataKey::HasVoted(poll_id, voter.clone()), &true);
 }
+
+// ── Admin approval storage ───────────────────────────────────────────────────
+
+/// Whether `admin` has already approved an outcome for `poll_id`.
+pub fn has_approved(env: &Env, poll_id: u64, admin: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .has(&DataKey::Approval(poll_id, admin.clone()))
+}
+
+/// Read the outcome approved by `admin` on `poll_id`, if any.
+pub fn read_approval(env: &Env, poll_id: u64, admin: &Address) -> Option<VoteChoice> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Approval(poll_id, admin.clone()))
+}
+
+/// Record that `admin` approved `outcome` on `poll_id`.
+pub fn write_approval(env: &Env, poll_id: u64, admin: &Address, outcome: VoteChoice) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Approval(poll_id, admin.clone()), &outcome);
+}
+
+/// Read the total number of admin approvals for `poll_id`. Defaults to 0.
+pub fn read_approval_count(env: &Env, poll_id: u64) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ApprovalCount(poll_id))
+        .unwrap_or(0)
+}
+
+/// Persist the total number of admin approvals for `poll_id`.
+pub fn write_approval_count(env: &Env, poll_id: u64, count: u32) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::ApprovalCount(poll_id), &count);
+}
+

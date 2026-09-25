@@ -170,6 +170,33 @@ pub(crate) fn consensus_bps(tally: &VoteTally) -> (bool, u32) {
     (leading_is_yes, share_bps)
 }
 
+/// Record an admin's approval of an outcome for a contested poll.
+///
+/// Flow (Checks → Effects):
+/// 1. Verifies that `admin` is a registered admin, else `Unauthorized`.
+/// 2. Authenticates `admin`.
+/// 3. If `admin` has not yet approved `poll_id`:
+///    - Increments the approval counter for `poll_id`.
+/// 4. Stores `admin`'s chosen outcome under `DataKey::Approval(poll_id, admin)`.
+pub fn approve(
+    env: &Env,
+    admin: Address,
+    poll_id: u64,
+    outcome: VoteChoice,
+) -> Result<(), PredictXError> {
+    storage::require_admin(env, &admin)?;
+    admin.require_auth();
+
+    if !storage::has_approved(env, poll_id, &admin) {
+        let count = storage::read_approval_count(env, poll_id);
+        storage::write_approval_count(env, poll_id, count.saturating_add(1));
+    }
+
+    storage::write_approval(env, poll_id, &admin, outcome);
+
+    Ok(())
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -485,4 +512,90 @@ mod test {
     fn consensus_bps_tie_favours_yes() {
         assert_eq!(super::consensus_bps(&tally(10, 10, 3)), (true, 5_000));
     }
+
+    // ── Admin approvals ───────────────────────────────────────────────────────
+
+    #[test]
+    fn approve_increments_counter_and_stores_outcome() {
+        let (_env, admin, client) = setup();
+
+        assert_eq!(client.get_approval_count(&1_u64), 0);
+        assert_eq!(client.get_approval(&1_u64, &admin), None);
+
+        client.approve(&admin, &1_u64, &VoteChoice::Yes);
+
+        assert_eq!(client.get_approval_count(&1_u64), 1);
+        assert_eq!(client.get_approval(&1_u64, &admin), Some(VoteChoice::Yes));
+    }
+
+    #[test]
+    fn approve_twice_from_same_admin_increments_counter_only_once() {
+        let (_env, admin, client) = setup();
+
+        client.approve(&admin, &1_u64, &VoteChoice::Yes);
+        assert_eq!(client.get_approval_count(&1_u64), 1);
+
+        // Second approval by same admin must not increment the counter
+        client.approve(&admin, &1_u64, &VoteChoice::No);
+        assert_eq!(client.get_approval_count(&1_u64), 1);
+        assert_eq!(client.get_approval(&1_u64, &admin), Some(VoteChoice::No));
+    }
+
+    #[test]
+    fn approvals_from_different_admins_each_count() {
+        let (env, admin1, client) = setup();
+        let admin2 = Address::generate(&env);
+        let admin3 = Address::generate(&env);
+
+        client.add_admin(&admin1, &admin2);
+        client.add_admin(&admin1, &admin3);
+
+        client.approve(&admin1, &1_u64, &VoteChoice::Yes);
+        assert_eq!(client.get_approval_count(&1_u64), 1);
+
+        client.approve(&admin2, &1_u64, &VoteChoice::Yes);
+        assert_eq!(client.get_approval_count(&1_u64), 2);
+
+        client.approve(&admin3, &1_u64, &VoteChoice::No);
+        assert_eq!(client.get_approval_count(&1_u64), 3);
+
+        assert_eq!(client.get_approval(&1_u64, &admin1), Some(VoteChoice::Yes));
+        assert_eq!(client.get_approval(&1_u64, &admin2), Some(VoteChoice::Yes));
+        assert_eq!(client.get_approval(&1_u64, &admin3), Some(VoteChoice::No));
+    }
+
+    #[test]
+    fn non_admin_approving_returns_unauthorized() {
+        let (env, _admin, client) = setup();
+        let non_admin = Address::generate(&env);
+
+        let err = client
+            .try_approve(&non_admin, &1_u64, &VoteChoice::Yes)
+            .expect_err("non-admin approval must fail");
+
+        assert_eq!(err, Ok(PredictXError::Unauthorized));
+        assert_eq!(client.get_approval_count(&1_u64), 0);
+        assert_eq!(client.get_approval(&1_u64, &non_admin), None);
+    }
+
+    #[test]
+    fn approval_counts_are_isolated_per_poll() {
+        let (_env, admin, client) = setup();
+
+        assert_eq!(client.get_approval_count(&1_u64), 0);
+        assert_eq!(client.get_approval_count(&2_u64), 0);
+
+        client.approve(&admin, &1_u64, &VoteChoice::Yes);
+
+        assert_eq!(client.get_approval_count(&1_u64), 1);
+        assert_eq!(client.get_approval_count(&2_u64), 0);
+
+        client.approve(&admin, &2_u64, &VoteChoice::No);
+
+        assert_eq!(client.get_approval_count(&1_u64), 1);
+        assert_eq!(client.get_approval_count(&2_u64), 1);
+        assert_eq!(client.get_approval(&1_u64, &admin), Some(VoteChoice::Yes));
+        assert_eq!(client.get_approval(&2_u64, &admin), Some(VoteChoice::No));
+    }
 }
+
