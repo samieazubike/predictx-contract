@@ -38,6 +38,8 @@ enum DataKey {
     Voters(u64),
     /// `(poll_id, voter)` → `bool` — has this voter cast a vote? (Temporary)
     HasVoted(u64, Address),
+    /// Token used to pay out voter rewards.
+    RewardToken,
 }
 
 fn get_admin(env: &Env) -> Result<Address, PredictXError> {
@@ -205,6 +207,27 @@ impl VotingOracle {
             .persistent()
             .get(&DataKey::PollOutcome(poll_id))
             .ok_or(PredictXError::PollNotFound)
+    }
+
+    /// Set the token used to pay voter rewards. Admin only.
+    pub fn set_reward_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), PredictXError> {
+        storage::require_admin(&env, &admin)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::RewardToken, &token);
+        Ok(())
+    }
+
+    /// Pay the caller their equal share of a resolved poll's voter reward pool.
+    pub fn claim_voter_reward(
+        env: Env,
+        voter: Address,
+        poll_id: u64,
+    ) -> Result<i128, PredictXError> {
+        voting::claim_voter_reward(&env, voter, poll_id)
     }
 }
 

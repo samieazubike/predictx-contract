@@ -74,4 +74,6 @@ pub enum PredictXError {
     StakeBelowMinimum = 34,
     /// The poll already has the maximum number of voters.
     MaxVotersReached = 35,
+    /// Caller did not vote on this poll and cannot claim its voter reward.
+    NotEligibleVoter = 36,
 }
