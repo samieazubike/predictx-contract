@@ -1,7 +1,7 @@
 use crate::{storage, DataKey, MAX_VOTERS};
 use predictx_shared::{
     PollStatus, PredictXError, VoteChoice, VoteTally, AUTO_RESOLVE_THRESHOLD_BPS, BPS_DENOMINATOR,
-    VOTING_WINDOW_SECS,
+    MULTI_SIG_REQUIRED, VOTING_WINDOW_SECS,
 };
 use soroban_sdk::{Address, Env, Symbol};
 
@@ -170,16 +170,85 @@ pub(crate) fn consensus_bps(tally: &VoteTally) -> (bool, u32) {
     (leading_is_yes, share_bps)
 }
 
+/// Resolve an open dispute on a poll under admin / multi-sig control.
+///
+/// Flow (Checks → Effects):
+/// 1. Authenticates the caller as an admin.
+/// 2. Verifies the caller is a registered admin, else `Unauthorized`.
+/// 3. Verifies that an open dispute exists for `poll_id`, else `PollNotFound`.
+/// 4. Ensures the dispute has not already been resolved, else `PollAlreadyResolved`.
+/// 5. Validates that admin approvals have reached the required multi-sig threshold
+///    (`dispute.required_approvals`, defaulting to `MULTI_SIG_REQUIRED`), else `InsufficientAdminApprovals`.
+/// 6. Writes the final outcome to persistent storage (`DataKey::PollOutcome(poll_id)`).
+/// 7. Marks `dispute.resolved = true` and updates dispute in persistent storage.
+/// 8. Sets poll status to `PollStatus::Resolved` with the current timestamp.
+/// 9. Emits a `DisputeResolved` event with `poll_id` and `final_outcome`.
+pub fn resolve_dispute(
+    env: &Env,
+    admin: Address,
+    poll_id: u64,
+    final_outcome: VoteChoice,
+) -> Result<(), PredictXError> {
+    storage::require_admin(env, &admin)?;
+    admin.require_auth();
+
+    // ── Checks ────────────────────────────────────────────────────────────────
+
+    let mut dispute = storage::read_dispute(env, poll_id).ok_or(PredictXError::PollNotFound)?;
+
+    if dispute.resolved || crate::read_poll_status(env, poll_id) == PollStatus::Resolved {
+        return Err(PredictXError::PollAlreadyResolved);
+    }
+
+    // TODO: Gate resolution on multi-sig approval threshold using MULTI_SIG_REQUIRED
+    // once the multi-sig approval ledger (#93) and threshold enforcement (#94) are merged.
+    let required_approvals = if dispute.required_approvals == 0 {
+        MULTI_SIG_REQUIRED
+    } else {
+        dispute.required_approvals
+    };
+
+    if dispute.admin_approvals < required_approvals {
+        return Err(PredictXError::InsufficientAdminApprovals);
+    }
+
+    // ── Effects ───────────────────────────────────────────────────────────────
+
+    dispute.resolved = true;
+    storage::write_dispute(env, &dispute);
+
+    let now = env.ledger().timestamp();
+    let stored_status = crate::StoredPollStatus {
+        status: PollStatus::Resolved,
+        updated_at: now,
+    };
+    env.storage()
+        .persistent()
+        .set(&DataKey::PollStatus(poll_id), &stored_status);
+    env.storage()
+        .persistent()
+        .set(&DataKey::PollOutcome(poll_id), &final_outcome);
+
+    env.events().publish(
+        (Symbol::new(env, "DisputeResolved"), poll_id, final_outcome),
+        final_outcome,
+    );
+
+    Ok(())
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod test {
     extern crate std;
 
-    use predictx_shared::{PollStatus, PredictXError, VoteChoice, VOTING_WINDOW_SECS};
+    use predictx_shared::{
+        Dispute, PollStatus, PredictXError, VoteChoice, MULTI_SIG_REQUIRED, VOTING_WINDOW_SECS,
+    };
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
-        Address, Env,
+        Address, Env, String,
     };
 
     use crate::{VotingOracle, VotingOracleClient, MAX_VOTERS};
@@ -484,5 +553,139 @@ mod test {
     #[test]
     fn consensus_bps_tie_favours_yes() {
         assert_eq!(super::consensus_bps(&tally(10, 10, 3)), (true, 5_000));
+    }
+
+    // ── resolve_dispute ───────────────────────────────────────────────────────
+
+    fn setup_disputed_poll(
+        env: &Env,
+        client: &VotingOracleClient,
+        admin_approvals: u32,
+        required_approvals: u32,
+        initial_outcome: VoteChoice,
+    ) {
+        // Put poll in Disputed state
+        client.set_poll_status(&1_u64, &PollStatus::Disputed);
+
+        env.as_contract(&client.address, || {
+            // Record initial poll outcome
+            env.storage()
+                .persistent()
+                .set(&crate::DataKey::PollOutcome(1_u64), &initial_outcome);
+
+            // Persist dispute record
+            let dispute = Dispute {
+                poll_id: 1,
+                initiator: Address::generate(env),
+                evidence_hash: String::from_str(env, "QmEvidenceHash123"),
+                dispute_fee: 100_000_000,
+                admin_approvals,
+                required_approvals,
+                resolved: false,
+                initiated_at: env.ledger().timestamp(),
+            };
+            super::storage::write_dispute(env, &dispute);
+        });
+    }
+
+    #[test]
+    fn resolve_dispute_below_threshold_returns_insufficient_admin_approvals() {
+        let (env, admin, client) = setup();
+        setup_disputed_poll(&env, &client, 2, MULTI_SIG_REQUIRED, VoteChoice::Yes);
+
+        let err = client
+            .try_resolve_dispute(&admin, &1_u64, &VoteChoice::No)
+            .expect_err("resolution below threshold must fail");
+
+        assert_eq!(err, Ok(PredictXError::InsufficientAdminApprovals));
+        assert_eq!(client.get_poll_status(&1_u64), PollStatus::Disputed);
+        assert!(!client.get_dispute(&1_u64).resolved);
+        assert_eq!(client.get_poll_outcome(&1_u64), VoteChoice::Yes);
+    }
+
+    #[test]
+    fn resolve_dispute_allows_outcome_differing_from_original() {
+        let (env, admin, client) = setup();
+        // Original outcome is Yes, dispute has enough approvals (3 >= 3)
+        setup_disputed_poll(&env, &client, 3, MULTI_SIG_REQUIRED, VoteChoice::Yes);
+
+        // Ruling decides the outcome is No (differs from original Yes)
+        client.resolve_dispute(&admin, &1_u64, &VoteChoice::No);
+
+        assert_eq!(client.get_poll_outcome(&1_u64), VoteChoice::No);
+        assert_eq!(client.get_poll_status(&1_u64), PollStatus::Resolved);
+        assert!(client.get_dispute(&1_u64).resolved);
+    }
+
+    #[test]
+    fn resolve_dispute_cannot_be_resolved_again() {
+        let (env, admin, client) = setup();
+        setup_disputed_poll(&env, &client, 3, MULTI_SIG_REQUIRED, VoteChoice::Yes);
+
+        client.resolve_dispute(&admin, &1_u64, &VoteChoice::No);
+
+        // Attempting to resolve the already-resolved dispute must fail
+        let err = client
+            .try_resolve_dispute(&admin, &1_u64, &VoteChoice::Unclear)
+            .expect_err("a resolved dispute cannot be resolved again");
+
+        assert_eq!(err, Ok(PredictXError::PollAlreadyResolved));
+    }
+
+    #[test]
+    fn resolve_dispute_emits_dispute_resolved_event() {
+        use soroban_sdk::{testutils::Events, TryIntoVal};
+
+        let (env, admin, client) = setup();
+        setup_disputed_poll(&env, &client, 3, MULTI_SIG_REQUIRED, VoteChoice::Yes);
+
+        client.resolve_dispute(&admin, &1_u64, &VoteChoice::No);
+
+        let events = env.events().all();
+        let mut found = false;
+        for i in 0..events.len() {
+            let (_, topics, data) = events.get(i).unwrap();
+            let name_result: Result<soroban_sdk::Symbol, _> =
+                topics.get(0).unwrap().try_into_val(&env);
+            if let Ok(name) = name_result {
+                if name == soroban_sdk::Symbol::new(&env, "DisputeResolved") {
+                    let event_poll_id: u64 = topics.get(1).unwrap().try_into_val(&env).unwrap();
+                    let event_outcome: VoteChoice =
+                        topics.get(2).unwrap().try_into_val(&env).unwrap();
+                    let data_outcome: VoteChoice = data.try_into_val(&env).unwrap();
+                    assert_eq!(event_poll_id, 1);
+                    assert_eq!(event_outcome, VoteChoice::No);
+                    assert_eq!(data_outcome, VoteChoice::No);
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "DisputeResolved event must be emitted");
+    }
+
+    #[test]
+    fn resolve_dispute_rejects_non_admin() {
+        let (env, _admin, client) = setup();
+        let stranger = Address::generate(&env);
+        setup_disputed_poll(&env, &client, 3, MULTI_SIG_REQUIRED, VoteChoice::Yes);
+
+        let err = client
+            .try_resolve_dispute(&stranger, &1_u64, &VoteChoice::No)
+            .expect_err("non-admin caller must be rejected");
+
+        assert_eq!(err, Ok(PredictXError::Unauthorized));
+        assert_eq!(client.get_poll_status(&1_u64), PollStatus::Disputed);
+        assert!(!client.get_dispute(&1_u64).resolved);
+    }
+
+    #[test]
+    fn resolve_dispute_rejects_unknown_poll() {
+        let (_env, admin, client) = setup();
+
+        let err = client
+            .try_resolve_dispute(&admin, &999_u64, &VoteChoice::No)
+            .expect_err("unknown poll dispute must be rejected");
+
+        assert_eq!(err, Ok(PredictXError::PollNotFound));
     }
 }

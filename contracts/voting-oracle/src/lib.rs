@@ -3,7 +3,7 @@
 mod storage;
 mod voting;
 
-use predictx_shared::{PollStatus, PredictXError, VoteChoice, VoteTally};
+use predictx_shared::{Dispute, PollStatus, PredictXError, VoteChoice, VoteTally};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec};
 
 /// Maximum number of admins that may be registered at once.
@@ -36,6 +36,8 @@ enum DataKey {
     PollOutcome(u64),
     /// `poll_id` → persistent roster of voters who cast a vote.
     Voters(u64),
+    /// `poll_id` → `Dispute`. (Persistent)
+    Dispute(u64),
     /// `(poll_id, voter)` → `bool` — has this voter cast a vote? (Temporary)
     HasVoted(u64, Address),
 }
@@ -205,6 +207,21 @@ impl VotingOracle {
             .persistent()
             .get(&DataKey::PollOutcome(poll_id))
             .ok_or(PredictXError::PollNotFound)
+    }
+
+    /// Resolve an open dispute on a poll under admin / multi-sig control.
+    pub fn resolve_dispute(
+        env: Env,
+        admin: Address,
+        poll_id: u64,
+        final_outcome: VoteChoice,
+    ) -> Result<(), PredictXError> {
+        voting::resolve_dispute(&env, admin, poll_id, final_outcome)
+    }
+
+    /// Read the dispute record for a poll, if one exists.
+    pub fn get_dispute(env: Env, poll_id: u64) -> Result<Dispute, PredictXError> {
+        storage::read_dispute(&env, poll_id).ok_or(PredictXError::PollNotFound)
     }
 }
 
