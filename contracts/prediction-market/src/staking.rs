@@ -237,12 +237,13 @@ mod test {
         // Register voting oracle
         let oracle_id = env.register(crate::voting_oracle::WASM, ());
         let oracle_client = crate::voting_oracle::Client::new(&env, &oracle_id);
-        oracle_client.initialize(&admin);
 
         // Register a Stellar-asset token for staking
         let token_admin = Address::generate(&env);
         let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
         let token_addr = token_contract.address();
+
+        oracle_client.initialize(&admin, &token_addr);
 
         // Register prediction market and initialize
         let contract_id = env.register(PredictionMarket, ());

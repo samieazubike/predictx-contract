@@ -3,8 +3,8 @@
 mod storage;
 mod voting;
 
-use predictx_shared::{PollStatus, PredictXError, VoteChoice, VoteTally};
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec};
+use predictx_shared::{Dispute, PollStatus, PredictXError, VoteChoice, VoteTally};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Vec};
 
 /// Maximum number of admins that may be registered at once.
 ///
@@ -29,6 +29,8 @@ enum DataKey {
     Admin,
     /// Registered admins `Vec<Address>`. (Instance)
     AdminList,
+    /// Soroban token contract `Address` used for dispute fees. (Instance)
+    TokenAddress,
     PollStatus(u64),
     /// `poll_id` → vote tally. (Temporary — only needed during the voting window)
     VoteTally(u64),
@@ -38,12 +40,21 @@ enum DataKey {
     Voters(u64),
     /// `(poll_id, voter)` → `bool` — has this voter cast a vote? (Temporary)
     HasVoted(u64, Address),
+    /// `poll_id` → `Dispute`. (Persistent)
+    Dispute(u64),
 }
 
 fn get_admin(env: &Env) -> Result<Address, PredictXError> {
     env.storage()
         .instance()
         .get(&DataKey::Admin)
+        .ok_or(PredictXError::NotInitialized)
+}
+
+pub(crate) fn get_token_address(env: &Env) -> Result<Address, PredictXError> {
+    env.storage()
+        .instance()
+        .get(&DataKey::TokenAddress)
         .ok_or(PredictXError::NotInitialized)
 }
 
@@ -66,13 +77,16 @@ pub(crate) fn read_poll_status_updated_at(env: &Env, poll_id: u64) -> u64 {
 
 #[contractimpl]
 impl VotingOracle {
-    pub fn initialize(env: Env, admin: Address) -> Result<(), PredictXError> {
+    pub fn initialize(env: Env, admin: Address, token: Address) -> Result<(), PredictXError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(PredictXError::AlreadyInitialized);
         }
         admin.require_auth();
 
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::TokenAddress, &token);
 
         // Seed the multi-admin registry with the initial admin.
         let mut admins: Vec<Address> = Vec::new(&env);
@@ -206,6 +220,25 @@ impl VotingOracle {
             .get(&DataKey::PollOutcome(poll_id))
             .ok_or(PredictXError::PollNotFound)
     }
+
+    /// Initiate a dispute against a resolved poll.
+    ///
+    /// The initiator must transfer the fixed dispute fee into the contract.
+    /// A `Dispute` record is persisted and the poll status transitions to
+    /// `Disputed`.
+    pub fn initiate_dispute(
+        env: Env,
+        initiator: Address,
+        poll_id: u64,
+        evidence_hash: String,
+    ) -> Result<Dispute, PredictXError> {
+        voting::initiate_dispute(&env, initiator, poll_id, evidence_hash)
+    }
+
+    /// Read the dispute record for a poll, if one exists.
+    pub fn get_dispute(env: Env, poll_id: u64) -> Result<Dispute, PredictXError> {
+        storage::read_dispute(&env, poll_id).ok_or(PredictXError::PollNotFound)
+    }
 }
 
 #[cfg(test)]
@@ -225,7 +258,8 @@ mod test {
         let client = VotingOracleClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let token = Address::generate(&env);
+        client.initialize(&admin, &token);
 
         client.set_poll_status(&42_u64, &PollStatus::Resolved);
         assert_eq!(client.get_poll_status(&42_u64), PollStatus::Resolved);
@@ -239,7 +273,8 @@ mod test {
         let client = VotingOracleClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let token = Address::generate(&env);
+        client.initialize(&admin, &token);
 
         (env, admin, client)
     }
