@@ -324,6 +324,37 @@ impl PredictionMarket {
             .ok_or(PredictXError::PollNotFound)
     }
 
+    /// Move a locked poll into community voting after its match has finished.
+    pub fn open_voting(env: Env, poll_id: u64) -> Result<(), PredictXError> {
+        let mut poll: Poll = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Poll(poll_id))
+            .ok_or(PredictXError::PollNotFound)?;
+
+        if poll.status != PollStatus::Locked {
+            return Err(PredictXError::PollNotLocked);
+        }
+
+        let parent_match: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(poll.match_id))
+            .ok_or(PredictXError::MatchNotFound)?;
+        if !parent_match.is_finished {
+            return Err(PredictXError::MatchNotFinished);
+        }
+
+        poll.status = PollStatus::Voting;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Poll(poll_id), &poll);
+        env.events()
+            .publish((Symbol::new(&env, "VotingOpened"), poll_id), ());
+
+        Ok(())
+    }
+
     // ── Staking ───────────────────────────────────────────────────────────────
 
     pub fn stake(
@@ -504,6 +535,98 @@ mod test {
         client.initialize(&admin, &oracle, &token, &treasury, &TEST_FEE_BPS);
         let err = client.try_initialize(&admin, &oracle, &token, &treasury, &TEST_FEE_BPS).expect_err("should fail");
         assert_eq!(err, Ok(PredictXError::AlreadyInitialized));
+    }
+
+    fn setup_open_voting() -> (Env, Address, Address, PredictionMarketClient<'static>) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let token = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &oracle, &token, &treasury, &TEST_FEE_BPS);
+        (env, admin, contract_id, client)
+    }
+
+    fn create_poll_for_open_voting(
+        env: &Env,
+        admin: &Address,
+        client: &PredictionMarketClient,
+    ) -> u64 {
+        let match_id = client.create_match(
+            admin,
+            &String::from_str(env, "Arsenal"),
+            &String::from_str(env, "Chelsea"),
+            &String::from_str(env, "Premier League"),
+            &String::from_str(env, "Emirates"),
+            &1_000_u64,
+        );
+        client.create_poll(
+            admin,
+            &match_id,
+            &String::from_str(env, "Will Arsenal win?"),
+            &PollCategory::TeamEvent,
+            &900_u64,
+        )
+    }
+
+    #[test]
+    fn open_voting_rejects_unfinished_match() {
+        let (env, admin, contract_id, client) = setup_open_voting();
+        let poll_id = create_poll_for_open_voting(&env, &admin, &client);
+        env.as_contract(&contract_id, || {
+            let mut poll: Poll = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Poll(poll_id))
+                .unwrap();
+            poll.status = PollStatus::Locked;
+            env.storage().persistent().set(&DataKey::Poll(poll_id), &poll);
+        });
+
+        let err = client
+            .try_open_voting(&poll_id)
+            .expect_err("unfinished match must reject opening voting")
+            .unwrap();
+        assert_eq!(err, PredictXError::MatchNotFinished);
+    }
+
+    #[test]
+    fn open_voting_rejects_active_poll() {
+        let (env, admin, _contract_id, client) = setup_open_voting();
+        let poll_id = create_poll_for_open_voting(&env, &admin, &client);
+
+        let err = client
+            .try_open_voting(&poll_id)
+            .expect_err("active poll must not open voting")
+            .unwrap();
+        assert_eq!(err, PredictXError::PollNotLocked);
+    }
+
+    #[test]
+    fn open_voting_moves_locked_poll_after_match_finishes() {
+        let (env, admin, contract_id, client) = setup_open_voting();
+        let poll_id = create_poll_for_open_voting(&env, &admin, &client);
+        let poll = client.get_poll(&poll_id);
+
+        env.as_contract(&contract_id, || {
+            let mut locked_poll: Poll = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Poll(poll_id))
+                .unwrap();
+            locked_poll.status = PollStatus::Locked;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Poll(poll_id), &locked_poll);
+        });
+        client.finish_match(&admin, &poll.match_id);
+
+        client.open_voting(&poll_id);
+
+        assert_eq!(client.get_poll(&poll_id).status, PollStatus::Voting);
     }
 
     #[test]
