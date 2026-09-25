@@ -74,4 +74,6 @@ pub enum PredictXError {
     StakeBelowMinimum = 34,
     /// The poll already has the maximum number of voters.
     MaxVotersReached = 35,
+    /// The poll's parent match has not finished yet.
+    MatchNotFinished = 36,
 }
