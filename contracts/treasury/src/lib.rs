@@ -10,6 +10,7 @@ pub struct Treasury;
 #[derive(Clone)]
 enum DataKey {
     Admin,
+    Token,
     Market,
     Balance(Address),
 }
@@ -18,6 +19,13 @@ fn get_admin(env: &Env) -> Result<Address, PredictXError> {
     env.storage()
         .instance()
         .get(&DataKey::Admin)
+        .ok_or(PredictXError::NotInitialized)
+}
+
+fn get_token(env: &Env) -> Result<Address, PredictXError> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Token)
         .ok_or(PredictXError::NotInitialized)
 }
 
@@ -37,18 +45,24 @@ fn get_balance(env: &Env, who: &Address) -> i128 {
 
 #[contractimpl]
 impl Treasury {
-    pub fn initialize(env: Env, admin: Address) -> Result<(), PredictXError> {
+    pub fn initialize(env: Env, admin: Address, token: Address) -> Result<(), PredictXError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(PredictXError::AlreadyInitialized);
         }
 
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Token, &token);
         Ok(())
     }
 
     pub fn admin(env: Env) -> Result<Address, PredictXError> {
         get_admin(&env)
+    }
+
+    /// Returns the token address this treasury holds, if initialized.
+    pub fn token(env: Env) -> Result<Address, PredictXError> {
+        get_token(&env)
     }
 
     /// Returns the registered market address, if set.
@@ -136,7 +150,8 @@ mod test {
         let client = TreasuryClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let token = Address::generate(&env);
+        client.initialize(&admin, &token);
 
         let user = Address::generate(&env);
         assert_eq!(client.deposit(&user, &10_i128), 10_i128);
@@ -155,7 +170,8 @@ mod test {
         let client = TreasuryClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let token = Address::generate(&env);
+        client.initialize(&admin, &token);
 
         // Register a market address
         let market = Address::generate(&env);
@@ -178,7 +194,8 @@ mod test {
         let client = TreasuryClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let token = Address::generate(&env);
+        client.initialize(&admin, &token);
 
         // Register the market address
         let market = Address::generate(&env);
@@ -199,7 +216,8 @@ mod test {
         let client = TreasuryClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let token = Address::generate(&env);
+        client.initialize(&admin, &token);
 
         let non_admin = Address::generate(&env);
         let new_market = Address::generate(&env);
@@ -207,5 +225,59 @@ mod test {
             .try_set_market(&non_admin, &new_market)
             .expect_err("should be unauthorized");
         assert_eq!(err, Ok(PredictXError::Unauthorized));
+    }
+
+    // ── initialize / token tests ───────────────────────────────────────────
+
+    #[test]
+    fn initialize_stores_admin_and_token() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(Treasury, ());
+        let client = TreasuryClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        client.initialize(&admin, &token);
+
+        assert_eq!(client.admin(), admin);
+        assert_eq!(client.token(), token);
+    }
+
+    #[test]
+    fn initialize_is_one_time_only() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(Treasury, ());
+        let client = TreasuryClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        client.initialize(&admin, &token);
+
+        let other_token = Address::generate(&env);
+        let err = client
+            .try_initialize(&admin, &other_token)
+            .expect_err("should be already initialized");
+        assert_eq!(err, Ok(PredictXError::AlreadyInitialized));
+
+        // The original token is preserved.
+        assert_eq!(client.token(), token);
+    }
+
+    #[test]
+    fn token_before_initialize_returns_not_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(Treasury, ());
+        let client = TreasuryClient::new(&env, &contract_id);
+
+        let err = client
+            .try_token()
+            .expect_err("should be not initialized");
+        assert_eq!(err, Ok(PredictXError::NotInitialized));
     }
 }
