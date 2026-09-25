@@ -1,7 +1,6 @@
 #![no_std]
 
 mod matches;
-mod payouts;
 mod staking;
 pub(crate) mod token_utils;
 
@@ -317,6 +316,41 @@ impl PredictionMarket {
         Ok(poll_id)
     }
 
+
+    /// Resolve a poll with a boolean outcome. Callable only by the registered oracle.
+    pub fn resolve_poll(
+        env: Env,
+        caller: Address,
+        poll_id: u64,
+        outcome: bool,
+    ) -> Result<(), PredictXError> {
+        caller.require_auth();
+        let oracle = get_oracle(&env)?;
+        if caller != oracle {
+            return Err(PredictXError::Unauthorized);
+        }
+
+        let mut poll: Poll = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Poll(poll_id))
+            .ok_or(PredictXError::PollNotFound)?;
+
+        if poll.status == PollStatus::Resolved || poll.outcome.is_some() {
+            return Err(PredictXError::PollAlreadyResolved);
+        }
+
+        poll.outcome = Some(outcome);
+        poll.resolution_time = env.ledger().timestamp();
+        poll.status = PollStatus::Resolved;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Poll(poll_id), &poll);
+
+        Ok(())
+    }
+
     pub fn get_poll(env: Env, poll_id: u64) -> Result<Poll, PredictXError> {
         env.storage()
             .persistent()
@@ -363,33 +397,6 @@ impl PredictionMarket {
 
     pub fn get_platform_stats(env: Env) -> PlatformStats {
         get_platform_stats(&env)
-    }
-
-    // ── Payouts ──────────────────────────────────────────────────────────────
-
-    pub fn resolve_poll(
-        env: Env,
-        admin: Address,
-        poll_id: u64,
-        outcome: bool,
-    ) -> Result<(), PredictXError> {
-        payouts::resolve_poll(&env, admin, poll_id, outcome)
-    }
-
-    pub fn claim_winnings(
-        env: Env,
-        user: Address,
-        poll_id: u64,
-    ) -> Result<i128, PredictXError> {
-        payouts::claim_winnings(&env, user, poll_id)
-    }
-
-    pub fn calculate_winnings(
-        env: Env,
-        poll_id: u64,
-        user: Address,
-    ) -> Result<i128, PredictXError> {
-        payouts::calculate_winnings(&env, poll_id, user)
     }
 
     // ── Token view functions ──────────────────────────────────────────────────
@@ -453,7 +460,7 @@ extern crate std;
 #[cfg(test)]
 mod test {
     use super::*;
-    use predictx_shared::StakeSide;
+    use predictx_shared::{PollCategory, StakeSide};
     use soroban_sdk::testutils::{Address as _, Ledger};
     use soroban_sdk::token;
 
@@ -687,4 +694,96 @@ mod test {
         let err = client.try_emergency_withdraw(&user, &3_u64).expect_err("double withdrawal should fail");
         assert_eq!(err, Ok(PredictXError::AlreadyClaimed));
     }
+
+    fn seed_active_poll(env: &Env, contract_id: &Address, poll_id: u64, creator: &Address) {
+        let poll = Poll {
+            poll_id,
+            match_id: 1,
+            creator: creator.clone(),
+            question: String::from_str(env, "Will the home team win?"),
+            category: PollCategory::TeamEvent,
+            lock_time: env.ledger().timestamp() + 3600,
+            yes_pool: 0,
+            no_pool: 0,
+            yes_count: 0,
+            no_count: 0,
+            status: PollStatus::Active,
+            outcome: None,
+            resolution_time: 0,
+            created_at: env.ledger().timestamp(),
+        };
+        env.as_contract(contract_id, || {
+            env.storage().persistent().set(&DataKey::Poll(poll_id), &poll);
+        });
+    }
+
+    #[test]
+    fn resolve_poll_rejects_non_oracle() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let tok = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &oracle, &tok, &treasury, &TEST_FEE_BPS);
+        seed_active_poll(&env, &contract_id, 1, &admin);
+        let err = client.try_resolve_poll(&stranger, &1_u64, &true).expect_err("non-oracle");
+        assert_eq!(err, Ok(PredictXError::Unauthorized));
+    }
+
+    #[test]
+    fn resolve_poll_rejects_unknown_poll() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let tok = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &oracle, &tok, &treasury, &TEST_FEE_BPS);
+        let err = client.try_resolve_poll(&oracle, &99_u64, &false).expect_err("missing");
+        assert_eq!(err, Ok(PredictXError::PollNotFound));
+    }
+
+    #[test]
+    fn resolve_poll_sets_outcome_and_resolution_time() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_700_000_000);
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let tok = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &oracle, &tok, &treasury, &TEST_FEE_BPS);
+        seed_active_poll(&env, &contract_id, 7, &admin);
+        client.resolve_poll(&oracle, &7_u64, &true);
+        let poll = client.get_poll(&7_u64);
+        assert_eq!(poll.outcome, Some(true));
+        assert_eq!(poll.resolution_time, 1_700_000_000);
+        assert_eq!(poll.status, PollStatus::Resolved);
+    }
+
+    #[test]
+    fn resolve_poll_rejects_already_resolved() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictionMarket, ());
+        let client = PredictionMarketClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let tok = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &oracle, &tok, &treasury, &TEST_FEE_BPS);
+        seed_active_poll(&env, &contract_id, 3, &admin);
+        client.resolve_poll(&oracle, &3_u64, &false);
+        let err = client.try_resolve_poll(&oracle, &3_u64, &true).expect_err("already");
+        assert_eq!(err, Ok(PredictXError::PollAlreadyResolved));
+    }
+
 }
