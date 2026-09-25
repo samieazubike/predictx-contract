@@ -3,7 +3,7 @@ use predictx_shared::{
     PollStatus, PredictXError, VoteChoice, VoteTally, AUTO_RESOLVE_THRESHOLD_BPS, BPS_DENOMINATOR,
     VOTING_WINDOW_SECS,
 };
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{token, Address, Env, Symbol};
 
 /// Record a voter's choice on a poll.
 ///
@@ -138,6 +138,71 @@ pub fn auto_resolve(env: &Env, poll_id: u64) -> Result<VoteChoice, PredictXError
     Ok(outcome)
 }
 
+/// Pay a voter their equal share of a resolved poll's reward pool.
+///
+/// Flow (Checks → Effects):
+/// 1. Authenticates the caller as the voter.
+/// 2. Verifies the poll is known and `Resolved`, else `PollNotFound` /
+///    `PollNotActive` — there is nothing to claim before resolution.
+/// 3. Verifies the caller actually voted on the poll, else
+///    `NotEligibleVoter`.
+/// 4. Computes `reward_pool / eligible_voter_count` (integer division, so the
+///    remainder stays in the contract) and transfers that share to the voter.
+///
+/// Pull-based by design: each voter claims for themselves, so one failing
+/// address cannot block the rest, and the roster is never iterated on-chain.
+/// The double-claim guard is tracked separately.
+pub fn claim_voter_reward(
+    env: &Env,
+    voter: Address,
+    poll_id: u64,
+) -> Result<i128, PredictXError> {
+    voter.require_auth();
+
+    if !env
+        .storage()
+        .persistent()
+        .has(&DataKey::PollStatus(poll_id))
+    {
+        return Err(PredictXError::PollNotFound);
+    }
+
+    if crate::read_poll_status(env, poll_id) != PollStatus::Resolved {
+        return Err(PredictXError::PollNotActive);
+    }
+
+    let voters = storage::read_voters(env, poll_id);
+    if !voters.contains(voter.clone()) {
+        return Err(PredictXError::NotEligibleVoter);
+    }
+
+    // `voters` contains `voter`, so the divisor is at least one.
+    let eligible = voters.len();
+    let tally = storage::read_tally(env, poll_id).ok_or(PredictXError::PollNotFound)?;
+    let share = tally.reward_pool / i128::from(eligible);
+    if share <= 0 {
+        return Err(PredictXError::InsufficientBalance);
+    }
+
+    let token_addr: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::RewardToken)
+        .ok_or(PredictXError::NotInitialized)?;
+    token::Client::new(env, &token_addr).transfer(
+        &env.current_contract_address(),
+        &voter,
+        &share,
+    );
+
+    env.events().publish(
+        (Symbol::new(env, "VoterRewardClaimed"), poll_id, voter),
+        share,
+    );
+
+    Ok(share)
+}
+
 /// Share of the decisive (Yes/No) votes held by the leading outcome.
 ///
 /// Returns `(leading_is_yes, share_bps)`, where `share_bps` is rounded down
@@ -179,7 +244,7 @@ mod test {
     use predictx_shared::{PollStatus, PredictXError, VoteChoice, VOTING_WINDOW_SECS};
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
-        Address, Env,
+        token, Address, Env,
     };
 
     use crate::{VotingOracle, VotingOracleClient, MAX_VOTERS};
@@ -484,5 +549,115 @@ mod test {
     #[test]
     fn consensus_bps_tie_favours_yes() {
         assert_eq!(super::consensus_bps(&tally(10, 10, 3)), (true, 5_000));
+    }
+
+    // ── voter rewards ────────────────────────────────────────────────────────
+
+    /// Like `setup`, but also returns the contract id so tests can mint the
+    /// reward token to it and seed the tally directly.
+    fn setup_with_contract_id() -> (Env, Address, VotingOracleClient<'static>, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let cid = env.register(VotingOracle, ());
+        let client = VotingOracleClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+
+        client.initialize(&admin);
+        env.ledger().with_mut(|l| l.timestamp = 1_000_000);
+        client.set_poll_status(&1_u64, &PollStatus::Voting);
+
+        (env, admin, client, cid)
+    }
+
+    /// Register a reward token, fund the poll's pool, and resolve poll 1.
+    ///
+    /// Returns the token address and the three eligible voters.
+    fn seed_reward_poll(
+        env: &Env,
+        client: &VotingOracleClient,
+        contract_id: &Address,
+        reward_pool: i128,
+    ) -> (Address, Address, Address, Address) {
+        let token_admin = Address::generate(env);
+        let token_addr = env.register_stellar_asset_contract_v2(token_admin).address();
+        let admin = client.admin();
+        client.set_reward_token(&admin, &token_addr);
+
+        let first = voter(env);
+        let second = voter(env);
+        let third = voter(env);
+        client.cast_vote(&first, &1_u64, &VoteChoice::Yes);
+        client.cast_vote(&second, &1_u64, &VoteChoice::No);
+        client.cast_vote(&third, &1_u64, &VoteChoice::Unclear);
+
+        token::StellarAssetClient::new(env, &token_addr).mint(contract_id, &reward_pool);
+
+        // Funding the pool is owned by the resolution/rewards issue; seed the
+        // reserved amount directly so the equal-share maths can be exercised.
+        env.as_contract(contract_id, || {
+            let mut tally = crate::storage::read_tally(env, 1_u64).unwrap();
+            tally.reward_pool = reward_pool;
+            crate::storage::write_tally(env, &tally);
+        });
+
+        client.set_poll_status(&1_u64, &PollStatus::Resolved);
+        (token_addr, first, second, third)
+    }
+
+    #[test]
+    fn claim_pays_each_eligible_voter_an_equal_share() {
+        let (env, _admin, client, cid) = setup_with_contract_id();
+        let (token_addr, first, second, third) = seed_reward_poll(&env, &client, &cid, 90);
+
+        assert_eq!(client.claim_voter_reward(&first, &1_u64), 30);
+        assert_eq!(client.claim_voter_reward(&second, &1_u64), 30);
+        assert_eq!(client.claim_voter_reward(&third, &1_u64), 30);
+
+        let token_client = token::Client::new(&env, &token_addr);
+        assert_eq!(token_client.balance(&first), 30);
+        assert_eq!(token_client.balance(&second), 30);
+        assert_eq!(token_client.balance(&third), 30);
+        assert_eq!(token_client.balance(&cid), 0);
+    }
+
+    #[test]
+    fn claim_keeps_integer_division_remainder_in_contract() {
+        let (env, _admin, client, cid) = setup_with_contract_id();
+        let (token_addr, first, second, third) = seed_reward_poll(&env, &client, &cid, 100);
+
+        // 100 / 3 = 33 each; paying 34 would over-draw the reserved pool.
+        assert_eq!(client.claim_voter_reward(&first, &1_u64), 33);
+        assert_eq!(client.claim_voter_reward(&second, &1_u64), 33);
+        assert_eq!(client.claim_voter_reward(&third, &1_u64), 33);
+
+        let token_client = token::Client::new(&env, &token_addr);
+        assert_eq!(token_client.balance(&cid), 1);
+    }
+
+    #[test]
+    fn claim_rejects_non_voter() {
+        let (env, _admin, client, cid) = setup_with_contract_id();
+        seed_reward_poll(&env, &client, &cid, 90);
+        let stranger = voter(&env);
+
+        let err = client
+            .try_claim_voter_reward(&stranger, &1_u64)
+            .expect_err("a non-voter must not be paid");
+
+        assert_eq!(err, Ok(PredictXError::NotEligibleVoter));
+    }
+
+    #[test]
+    fn claim_rejects_unresolved_poll() {
+        let (env, _admin, client, _cid) = setup_with_contract_id();
+        let eligible = voter(&env);
+        client.cast_vote(&eligible, &1_u64, &VoteChoice::Yes);
+
+        let err = client
+            .try_claim_voter_reward(&eligible, &1_u64)
+            .expect_err("an unresolved poll has no claimable reward");
+
+        assert_eq!(err, Ok(PredictXError::PollNotActive));
     }
 }
