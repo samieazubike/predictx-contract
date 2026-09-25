@@ -74,4 +74,6 @@ pub enum PredictXError {
     StakeBelowMinimum = 34,
     /// The poll already has the maximum number of voters.
     MaxVotersReached = 35,
+    /// The dispute window has closed; the poll can no longer be disputed.
+    DisputeWindowClosed = 36,
 }
