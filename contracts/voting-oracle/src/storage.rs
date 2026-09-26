@@ -1,6 +1,57 @@
-use crate::DataKey;
-use predictx_shared::{PredictXError, VoteTally};
-use soroban_sdk::{Address, Env, Vec};
+use predictx_shared::{PollStatus, PredictXError, VoteTally};
+use soroban_sdk::{contracttype, Address, Env, Vec};
+
+// ── Keys & stored types ───────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone)]
+pub(crate) struct StoredPollStatus {
+    pub(crate) status: PollStatus,
+    pub(crate) updated_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub(crate) enum DataKey {
+    Admin,
+    /// Registered admins `Vec<Address>`. (Instance)
+    AdminList,
+    PollStatus(u64),
+    /// `poll_id` → vote tally. (Temporary — only needed during the voting window)
+    VoteTally(u64),
+    /// `poll_id` → automatically resolved outcome.
+    PollOutcome(u64),
+    /// `poll_id` → persistent roster of voters who cast a vote.
+    Voters(u64),
+    /// `(poll_id, voter)` → `bool` — has this voter cast a vote? (Temporary)
+    HasVoted(u64, Address),
+}
+
+// ── Poll status storage ───────────────────────────────────────────────────────
+
+pub(crate) fn get_admin(env: &Env) -> Result<Address, PredictXError> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .ok_or(PredictXError::NotInitialized)
+}
+
+pub(crate) fn read_poll_status(env: &Env, poll_id: u64) -> PollStatus {
+    let stored: Option<StoredPollStatus> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::PollStatus(poll_id));
+
+    stored.map(|s| s.status).unwrap_or(PollStatus::Active)
+}
+
+pub(crate) fn read_poll_status_updated_at(env: &Env, poll_id: u64) -> u64 {
+    env.storage()
+        .persistent()
+        .get::<DataKey, StoredPollStatus>(&DataKey::PollStatus(poll_id))
+        .map(|stored| stored.updated_at)
+        .unwrap_or(0)
+}
 
 // ── Admin registry storage ────────────────────────────────────────────────────
 
