@@ -72,4 +72,6 @@ pub enum PredictXError {
     ContractPaused = 33,
     /// Stake amount is below the minimum required.
     StakeBelowMinimum = 34,
+    /// The poll already has the maximum number of voters.
+    MaxVotersReached = 35,
 }
