@@ -3,7 +3,21 @@ use predictx_shared::{
     PollStatus, PredictXError, VoteChoice, VoteTally, AUTO_RESOLVE_THRESHOLD_BPS, BPS_DENOMINATOR,
     VOTING_WINDOW_SECS,
 };
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{Address, Env, IntoVal, Symbol};
+
+fn has_user_staked(env: &Env, poll_id: u64, voter: &Address) -> Result<bool, PredictXError> {
+    let prediction_market: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::PredictionMarket)
+        .ok_or(PredictXError::NotInitialized)?;
+
+    Ok(env.invoke_contract(
+        &prediction_market,
+        &Symbol::new(env, "has_user_staked"),
+        (poll_id, voter.clone()).into_val(env),
+    ))
+}
 
 /// Record a voter's choice on a poll.
 ///
@@ -16,8 +30,6 @@ use soroban_sdk::{Address, Env, Symbol};
 /// 5. Persists the updated tally and the per-voter dedup marker, and returns
 ///    the tally.
 ///
-/// Out of scope for this change (tracked in separate issues): excluding stakers.
-pub fn cast_vote(
     env: &Env,
     voter: Address,
     poll_id: u64,
@@ -46,8 +58,8 @@ pub fn cast_vote(
         return Err(PredictXError::AlreadyVoted);
     }
 
-    if voters.len() >= MAX_VOTERS {
-        return Err(PredictXError::MaxVotersReached);
+    if has_user_staked(env, poll_id, &voter)? {
+        return Err(PredictXError::VoterIsStaker);
     }
 
     // ── Effects ───────────────────────────────────────────────────────────────
@@ -178,11 +190,36 @@ mod test {
 
     use predictx_shared::{PollStatus, PredictXError, VoteChoice, VOTING_WINDOW_SECS};
     use soroban_sdk::{
+        contract, contractimpl, contracttype,
         testutils::{Address as _, Ledger},
         Address, Env,
     };
 
-    use crate::{VotingOracle, VotingOracleClient, MAX_VOTERS};
+    #[contract]
+    struct TestPredictionMarket;
+
+    #[contracttype]
+    enum TestDataKey {
+        Staked(Address),
+    }
+
+    #[contractimpl]
+    impl TestPredictionMarket {
+        pub fn set_staked(env: Env, user: Address, staked: bool) {
+            env.storage()
+                .instance()
+                .set(&TestDataKey::Staked(user), &staked);
+        }
+
+        pub fn has_user_staked(env: Env, _poll_id: u64, user: Address) -> bool {
+            env.storage()
+                .instance()
+                .get(&TestDataKey::Staked(user))
+                .unwrap_or(false)
+        }
+    }
+
+    use crate::{VotingOracle, VotingOracleClient};
 
     fn setup() -> (Env, Address, VotingOracleClient<'static>) {
         let env = Env::default();
@@ -192,6 +229,8 @@ mod test {
         let admin = Address::generate(&env);
 
         client.initialize(&admin);
+        let prediction_market_id = env.register(TestPredictionMarket, ());
+        client.set_prediction_market(&prediction_market_id);
         env.ledger().with_mut(|l| l.timestamp = 1_000_000);
 
         // Register poll 1 as a known poll. `initiate_voting` (#80) will later
@@ -219,48 +258,31 @@ mod test {
     }
 
     #[test]
-    fn cast_vote_records_distinct_voters_in_persistent_roster() {
+    fn cast_vote_rejects_staker() {
         let (env, _admin, client) = setup();
-        let first = voter(&env);
-        let second = voter(&env);
+        let prediction_market_id = env.register(TestPredictionMarket, ());
+        client.set_prediction_market(&prediction_market_id);
+        let prediction_market =
+            TestPredictionMarketClient::new(&env, &prediction_market_id);
+        let staker = voter(&env);
+        prediction_market.set_staked(&staker, &true);
 
-        client.cast_vote(&first, &1_u64, &VoteChoice::Yes);
-        client.cast_vote(&second, &1_u64, &VoteChoice::No);
+        let err = client
+            .try_cast_vote(&staker, &1_u64, &VoteChoice::Yes)
+            .expect_err("stakers must not vote on their own poll");
 
-        let voters = client.get_voters(&1_u64);
-        assert_eq!(voters.len(), 2);
-        assert_eq!(voters.get(0).unwrap(), first);
-        assert_eq!(voters.get(1).unwrap(), second);
+        assert_eq!(err, Ok(PredictXError::VoterIsStaker));
     }
 
     #[test]
-    fn duplicate_vote_does_not_duplicate_voter_roster_entry() {
+    fn cast_vote_allows_configured_prediction_market_non_staker() {
         let (env, _admin, client) = setup();
-        let voter = voter(&env);
+        let non_staker = voter(&env);
 
-        client.cast_vote(&voter, &1_u64, &VoteChoice::Yes);
-        let err = client
-            .try_cast_vote(&voter, &1_u64, &VoteChoice::No)
-            .expect_err("duplicate vote must be rejected");
+        let tally = client.cast_vote(&non_staker, &1_u64, &VoteChoice::Yes);
 
-        assert_eq!(err, Ok(PredictXError::AlreadyVoted));
-        assert_eq!(client.get_voters(&1_u64).len(), 1);
-    }
-
-    #[test]
-    fn cast_vote_rejects_voter_roster_over_cap() {
-        let (env, _admin, client) = setup();
-
-        for _ in 0..MAX_VOTERS {
-            client.cast_vote(&voter(&env), &1_u64, &VoteChoice::Yes);
-        }
-
-        let err = client
-            .try_cast_vote(&voter(&env), &1_u64, &VoteChoice::Yes)
-            .expect_err("voter roster cap must be enforced");
-
-        assert_eq!(err, Ok(PredictXError::MaxVotersReached));
-        assert_eq!(client.get_voters(&1_u64).len(), MAX_VOTERS);
+        assert_eq!(tally.total_voters, 1);
+        assert_eq!(tally.yes_votes, 1);
     }
 
     #[test]

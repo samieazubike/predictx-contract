@@ -27,6 +27,7 @@ struct StoredPollStatus {
 #[derive(Clone)]
 enum DataKey {
     Admin,
+    PredictionMarket,
     /// Registered admins `Vec<Address>`. (Instance)
     AdminList,
     PollStatus(u64),
@@ -84,6 +85,18 @@ impl VotingOracle {
 
     pub fn admin(env: Env) -> Result<Address, PredictXError> {
         get_admin(&env)
+    }
+
+    pub fn set_prediction_market(
+        env: Env,
+        prediction_market: Address,
+    ) -> Result<(), PredictXError> {
+        let admin = get_admin(&env)?;
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::PredictionMarket, &prediction_market);
+        Ok(())
     }
 
     /// Register `new_admin` in the multi-admin registry.
