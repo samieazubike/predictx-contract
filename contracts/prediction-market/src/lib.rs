@@ -1,6 +1,7 @@
 #![no_std]
 
 mod matches;
+mod payouts;
 mod staking;
 pub(crate) mod token_utils;
 
@@ -362,6 +363,33 @@ impl PredictionMarket {
 
     pub fn get_platform_stats(env: Env) -> PlatformStats {
         get_platform_stats(&env)
+    }
+
+    // ── Payouts ──────────────────────────────────────────────────────────────
+
+    pub fn resolve_poll(
+        env: Env,
+        admin: Address,
+        poll_id: u64,
+        outcome: bool,
+    ) -> Result<(), PredictXError> {
+        payouts::resolve_poll(&env, admin, poll_id, outcome)
+    }
+
+    pub fn claim_winnings(
+        env: Env,
+        user: Address,
+        poll_id: u64,
+    ) -> Result<i128, PredictXError> {
+        payouts::claim_winnings(&env, user, poll_id)
+    }
+
+    pub fn calculate_winnings(
+        env: Env,
+        poll_id: u64,
+        user: Address,
+    ) -> Result<i128, PredictXError> {
+        payouts::calculate_winnings(&env, poll_id, user)
     }
 
     // ── Token view functions ──────────────────────────────────────────────────
