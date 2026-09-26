@@ -74,4 +74,6 @@ pub enum PredictXError {
     StakeBelowMinimum = 34,
     /// The poll already has the maximum number of voters.
     MaxVotersReached = 35,
+    /// Voter rewards have already been funded for this poll.
+    VoterRewardsAlreadyFunded = 36,
 }
