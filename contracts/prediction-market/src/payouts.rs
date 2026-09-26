@@ -52,6 +52,44 @@ pub fn resolve_poll(
     Ok(())
 }
 
+/// Whether the platform fee for `poll_id` has already been sent to the
+/// treasury. The marker is per poll, not per claim, so the second winner to
+/// claim cannot pay the fee twice.
+fn has_fee_paid(env: &Env, poll_id: u64) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::FeePaid(poll_id))
+        .unwrap_or(false)
+}
+
+fn set_fee_paid(env: &Env, poll_id: u64) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::FeePaid(poll_id), &true);
+}
+
+/// Move the platform fee for `poll_id` to the treasury on the first claim and
+/// remember that it happened. Returns the fee so callers can report the same
+/// distributable pot on every later claim.
+pub fn ensure_platform_fee_routed(
+    env: &Env,
+    poll_id: u64,
+    total_pool: i128,
+) -> Result<i128, PredictXError> {
+    let fee = total_pool * token_utils::get_platform_fee_bps(env) as i128
+        / BPS_DENOMINATOR as i128;
+
+    if has_fee_paid(env, poll_id) {
+        return Ok(fee);
+    }
+
+    if fee > 0 {
+        token_utils::transfer_to_treasury(env, fee)?;
+    }
+    set_fee_paid(env, poll_id);
+    Ok(fee)
+}
+
 pub fn claim_winnings(
     env: &Env,
     user: Address,
@@ -81,6 +119,11 @@ pub fn claim_winnings(
     if amount <= 0 {
         return Err(PredictXError::NotOnWinningSide);
     }
+
+    // Skim the platform fee before paying anyone out: `calculate_winnings_for`
+    // already excludes it from `amount`, so without this transfer the fee would
+    // simply stay stranded in the contract.
+    ensure_platform_fee_routed(env, poll_id, poll.yes_pool + poll.no_pool)?;
 
     stake.claimed = true;
     env.storage()
@@ -342,5 +385,44 @@ mod test {
             let name: Symbol = topics.get(0).unwrap().try_into_val(&s.env).unwrap();
             assert_ne!(name, Symbol::new(&s.env, "WinningsClaimed"));
         }
+    }
+
+    #[test]
+    fn first_claim_routes_the_platform_fee_to_the_treasury() {
+        let s = setup();
+        let poll_id = create_poll(&s, 2_000_000);
+        let winner = stake_user(&s, poll_id, StakeSide::Yes, 100_000_000);
+        stake_user(&s, poll_id, StakeSide::No, 300_000_000);
+        s.client.resolve_poll(&s.admin, &poll_id, &true);
+
+        let token_client = token::Client::new(&s.env, &s.token_addr);
+        let treasury = s.client.get_treasury_address();
+        assert_eq!(token_client.balance(&treasury), 0);
+
+        s.client.claim_winnings(&winner, &poll_id);
+
+        // 5% of the 400_000_000 combined pool.
+        assert_eq!(token_client.balance(&treasury), 20_000_000);
+    }
+
+    #[test]
+    fn platform_fee_is_routed_only_once_across_claims() {
+        let s = setup();
+        let poll_id = create_poll(&s, 2_000_000);
+        let alice = stake_user(&s, poll_id, StakeSide::Yes, 60_000_000);
+        let bob = stake_user(&s, poll_id, StakeSide::Yes, 40_000_000);
+        stake_user(&s, poll_id, StakeSide::No, 300_000_000);
+        s.client.resolve_poll(&s.admin, &poll_id, &true);
+
+        s.client.claim_winnings(&alice, &poll_id);
+        s.client.claim_winnings(&bob, &poll_id);
+
+        let token_client = token::Client::new(&s.env, &s.token_addr);
+        let treasury = s.client.get_treasury_address();
+        assert_eq!(token_client.balance(&treasury), 20_000_000);
+
+        // 380_000_000 distributable, split 60/40 across the winning pool.
+        assert_eq!(token_client.balance(&alice), 228_000_000);
+        assert_eq!(token_client.balance(&bob), 152_000_000);
     }
 }
