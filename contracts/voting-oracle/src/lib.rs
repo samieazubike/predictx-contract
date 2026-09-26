@@ -3,8 +3,8 @@
 mod storage;
 mod voting;
 
-use predictx_shared::{PollStatus, PredictXError, VoteChoice, VoteTally};
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec};
+use predictx_shared::{Dispute, PollStatus, PredictXError, VoteChoice, VoteTally};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Vec};
 
 /// Maximum number of admins that may be registered at once.
 ///
@@ -38,6 +38,8 @@ enum DataKey {
     Voters(u64),
     /// `(poll_id, voter)` → `bool` — has this voter cast a vote? (Temporary)
     HasVoted(u64, Address),
+    /// `poll_id` → `Dispute`. (Persistent)
+    Dispute(u64),
 }
 
 fn get_admin(env: &Env) -> Result<Address, PredictXError> {
@@ -205,6 +207,28 @@ impl VotingOracle {
             .persistent()
             .get(&DataKey::PollOutcome(poll_id))
             .ok_or(PredictXError::PollNotFound)
+    }
+
+    /// Open a dispute against `poll_id`.
+    ///
+    /// Rejects a second dispute while an unresolved one is already open with
+    /// `DisputeAlreadyOpen`. Re-disputing after a dispute is resolved is out of
+    /// scope for this change (see [`voting::initiate_dispute`]).
+    pub fn initiate_dispute(
+        env: Env,
+        initiator: Address,
+        poll_id: u64,
+        evidence_hash: String,
+        dispute_fee: i128,
+    ) -> Result<Dispute, PredictXError> {
+        voting::initiate_dispute(&env, initiator, poll_id, evidence_hash, dispute_fee)
+    }
+
+    /// Read the dispute recorded for `poll_id`.
+    ///
+    /// Returns `PollNotFound` when no dispute has ever been opened for the poll.
+    pub fn get_dispute(env: Env, poll_id: u64) -> Result<Dispute, PredictXError> {
+        voting::get_dispute(&env, poll_id)
     }
 }
 
