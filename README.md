@@ -70,7 +70,7 @@ predictx-contract/
 ## Prerequisites
 
 - [Rust](https://rustup.rs/) (stable)
-- Soroban CLI — `cargo install --locked soroban-cli`
+- Soroban CLI 22.6.0 — `cargo install --locked soroban-cli --version 22.6.0`
 - `wasm32-unknown-unknown` target — `rustup target add wasm32-unknown-unknown`
 
 ## Building

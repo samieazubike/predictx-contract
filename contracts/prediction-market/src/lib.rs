@@ -365,33 +365,6 @@ impl PredictionMarket {
         get_platform_stats(&env)
     }
 
-    // ── Payouts ──────────────────────────────────────────────────────────────
-
-    pub fn resolve_poll(
-        env: Env,
-        admin: Address,
-        poll_id: u64,
-        outcome: bool,
-    ) -> Result<(), PredictXError> {
-        payouts::resolve_poll(&env, admin, poll_id, outcome)
-    }
-
-    pub fn claim_winnings(
-        env: Env,
-        user: Address,
-        poll_id: u64,
-    ) -> Result<i128, PredictXError> {
-        payouts::claim_winnings(&env, user, poll_id)
-    }
-
-    pub fn calculate_winnings(
-        env: Env,
-        poll_id: u64,
-        user: Address,
-    ) -> Result<i128, PredictXError> {
-        payouts::calculate_winnings(&env, poll_id, user)
-    }
-
     // ── Token view functions ──────────────────────────────────────────────────
 
     pub fn get_token_address(env: Env) -> Result<Address, PredictXError> {
@@ -444,6 +417,38 @@ impl PredictionMarket {
 
     pub fn get_match_count(env: Env) -> u64 {
         matches::get_match_count(&env)
+    }
+
+    // ── Payouts ───────────────────────────────────────────────────────────────
+
+    pub fn resolve_poll(
+        env: Env,
+        admin: Address,
+        poll_id: u64,
+        outcome: bool,
+    ) -> Result<(), PredictXError> {
+        payouts::resolve_poll(&env, admin, poll_id, outcome)
+    }
+
+    /// Claim winnings after a resolved poll.
+    ///
+    /// If the winning pool is empty (every staker was on the losing side),
+    /// any staker may recover their original stake fee-free.  See
+    /// [`payouts::claim_winnings`] for the full description.
+    pub fn claim_winnings(
+        env: Env,
+        claimant: Address,
+        poll_id: u64,
+    ) -> Result<i128, PredictXError> {
+        payouts::claim_winnings(&env, claimant, poll_id)
+    }
+
+    pub fn calculate_winnings(
+        env: Env,
+        poll_id: u64,
+        user: Address,
+    ) -> Result<i128, PredictXError> {
+        payouts::calculate_winnings(&env, poll_id, user)
     }
 }
 

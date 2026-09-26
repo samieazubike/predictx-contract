@@ -6,10 +6,7 @@ use std::{
 };
 
 fn workspace_root(manifest_dir: &Path) -> PathBuf {
-    manifest_dir
-        .join("../..")
-        .canonicalize()
-        .expect("failed to resolve workspace root")
+    manifest_dir.join("../..")
 }
 
 fn main() {

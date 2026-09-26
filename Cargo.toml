@@ -1,8 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "contracts/*",
-    "packages/*",
+    "contracts/mock-token",
+    "contracts/poll-factory",
+    "contracts/prediction-market",
+    "contracts/treasury",
+    "contracts/voting-oracle",
+    "packages/shared",
 ]
 
 [workspace.dependencies]

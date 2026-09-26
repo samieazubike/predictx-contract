@@ -320,8 +320,8 @@ mod test {
         let id = default_match(&env, &client, &admin);
         client.finish_match(&admin, &id);
         let events = env.events().all();
-        assert_eq!(events.len(), 1);
-        let (_, topics, _) = events.get(0).unwrap();
+        assert_eq!(events.len(), 2);
+        let (_, topics, _) = events.get(1).unwrap();
         let name: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
         assert_eq!(name, Symbol::new(&env, "MatchFinished"));
     }
