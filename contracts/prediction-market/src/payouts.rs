@@ -271,6 +271,56 @@ mod test {
     }
 
     #[test]
+    fn successful_claim_marks_stake_as_claimed() {
+        let s = setup();
+        let poll_id = create_poll(&s, 2_000_000);
+        let winner = stake_user(&s, poll_id, StakeSide::Yes, 100_000_000);
+        stake_user(&s, poll_id, StakeSide::No, 300_000_000);
+        s.client.resolve_poll(&s.admin, &poll_id, &true);
+
+        s.client.claim_winnings(&winner, &poll_id);
+
+        let stake = s.client.get_stake_info(&poll_id, &winner);
+        assert!(stake.claimed);
+    }
+
+    #[test]
+    fn second_claim_returns_already_claimed() {
+        let s = setup();
+        let poll_id = create_poll(&s, 2_000_000);
+        let winner = stake_user(&s, poll_id, StakeSide::Yes, 100_000_000);
+        stake_user(&s, poll_id, StakeSide::No, 300_000_000);
+        s.client.resolve_poll(&s.admin, &poll_id, &true);
+        s.client.claim_winnings(&winner, &poll_id);
+
+        let err = s
+            .client
+            .try_claim_winnings(&winner, &poll_id)
+            .expect_err("second claim should fail")
+            .unwrap();
+
+        assert_eq!(err, PredictXError::AlreadyClaimed);
+    }
+
+    #[test]
+    fn second_claim_does_not_change_contract_balance() {
+        let s = setup();
+        let poll_id = create_poll(&s, 2_000_000);
+        let winner = stake_user(&s, poll_id, StakeSide::Yes, 100_000_000);
+        stake_user(&s, poll_id, StakeSide::No, 300_000_000);
+        s.client.resolve_poll(&s.admin, &poll_id, &true);
+        s.client.claim_winnings(&winner, &poll_id);
+
+        let balance_after_first_claim = s.client.get_contract_balance();
+        let _ = s
+            .client
+            .try_claim_winnings(&winner, &poll_id)
+            .expect_err("second claim should fail");
+
+        assert_eq!(s.client.get_contract_balance(), balance_after_first_claim);
+    }
+
+    #[test]
     fn failed_zero_value_claim_emits_no_event() {
         let s = setup();
         let poll_id = create_poll(&s, 2_000_000);

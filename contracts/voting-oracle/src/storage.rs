@@ -48,6 +48,23 @@ pub fn write_tally(env: &Env, tally: &VoteTally) {
         .set(&DataKey::VoteTally(tally.poll_id), tally);
 }
 
+// ── Voter roster storage ─────────────────────────────────────────────────────
+
+/// Read the persistent voter roster for a poll, defaulting to an empty list.
+pub fn read_voters(env: &Env, poll_id: u64) -> Vec<Address> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Voters(poll_id))
+        .unwrap_or(Vec::new(env))
+}
+
+/// Persist the voter roster for a poll.
+pub fn write_voters(env: &Env, poll_id: u64, voters: &Vec<Address>) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Voters(poll_id), voters);
+}
+
 // ── Vote-dedup storage ────────────────────────────────────────────────────────
 
 /// Whether `voter` has already cast a vote on `poll_id`.

@@ -1,4 +1,4 @@
-use crate::{storage, DataKey};
+use crate::{storage, DataKey, MAX_VOTERS};
 use predictx_shared::{
     PollStatus, PredictXError, VoteChoice, VoteTally, AUTO_RESOLVE_THRESHOLD_BPS, BPS_DENOMINATOR,
     VOTING_WINDOW_SECS,
@@ -53,7 +53,8 @@ fn has_user_staked(env: &Env, poll_id: u64, voter: &Address) -> Result<bool, Pre
     }
 
     // Each address may vote at most once per poll.
-    if storage::has_voted(env, poll_id, &voter) {
+    let mut voters = storage::read_voters(env, poll_id);
+    if storage::has_voted(env, poll_id, &voter) || voters.contains(voter.clone()) {
         return Err(PredictXError::AlreadyVoted);
     }
 
@@ -84,6 +85,8 @@ fn has_user_staked(env: &Env, poll_id: u64, voter: &Address) -> Result<bool, Pre
     tally.total_voters += 1;
 
     storage::write_tally(env, &tally);
+    voters.push_back(voter.clone());
+    storage::write_voters(env, poll_id, &voters);
     storage::write_voted(env, poll_id, &voter);
     Ok(tally)
 }
@@ -442,7 +445,7 @@ mod test {
     #[test]
     fn auto_resolve_rejects_consensus_below_threshold() {
         let (env, _admin, client) = setup();
-        cast_votes(&env, &client, 849, 151);
+        cast_votes(&env, &client, 54, 10);
         env.ledger().set_timestamp(1_000_000 + VOTING_WINDOW_SECS);
 
         let err = client

@@ -10,6 +10,8 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec};
 ///
 /// Keeps `list_admins` bounded so it cannot grow without limit.
 pub const MAX_ADMINS: u32 = 10;
+/// Maximum voters retained per poll; keeping this low bounds full-vector reads.
+pub const MAX_VOTERS: u32 = 64;
 
 #[contract]
 pub struct VotingOracle;
@@ -33,6 +35,8 @@ enum DataKey {
     VoteTally(u64),
     /// `poll_id` → automatically resolved outcome.
     PollOutcome(u64),
+    /// `poll_id` → persistent roster of voters who cast a vote.
+    Voters(u64),
     /// `(poll_id, voter)` → `bool` — has this voter cast a vote? (Temporary)
     HasVoted(u64, Address),
 }
@@ -188,6 +192,11 @@ impl VotingOracle {
 
     pub fn get_poll_status_updated_at(env: Env, poll_id: u64) -> u64 {
         read_poll_status_updated_at(&env, poll_id)
+    }
+
+    /// Return the voters who have cast a vote on `poll_id`.
+    pub fn get_voters(env: Env, poll_id: u64) -> Vec<Address> {
+        storage::read_voters(&env, poll_id)
     }
 
     /// Record a voter's choice on a poll.
