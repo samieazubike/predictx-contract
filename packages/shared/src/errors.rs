@@ -82,6 +82,7 @@ pub enum PredictXError {
     MatchNotFinished = 36,
     /// The poll already has the maximum number of voters.
     MaxVotersReached = 35,
+    MaxVotersReached = 40,
     /// The voter did not back the winning outcome (including `Unclear`).
     VoterNotEligible = 36,
     /// The poll has no resolved outcome yet.

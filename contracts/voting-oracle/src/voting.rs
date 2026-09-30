@@ -252,6 +252,20 @@ pub fn cast_vote(
         return Err(PredictXError::VotingNotOpen);
     }
 
+    // The tally is the source of truth for the window opened by
+    // `initiate_voting`. Fall back to the status timestamp for legacy/test
+    // voting records that do not yet have a tally.
+    let voting_end_time = storage::read_tally(env, poll_id)
+        .map(|tally| tally.voting_end_time)
+        .unwrap_or_else(|| {
+            crate::read_poll_status_updated_at(env, poll_id)
+                .checked_add(VOTING_WINDOW_SECS)
+                .unwrap_or(0)
+        });
+    if env.ledger().timestamp() >= voting_end_time {
+        return Err(PredictXError::VotingWindowExpired);
+    }
+
     // Each address may vote at most once per poll.
     let mut voters = storage::read_voters(env, poll_id);
     if storage::has_voted(env, poll_id, &voter) || voters.contains(voter.clone()) {
@@ -1351,6 +1365,50 @@ mod test {
             .expect_err("resolved poll must reject voting");
 
         assert_eq!(err, Ok(PredictXError::VotingNotOpen));
+    }
+
+    #[test]
+    fn cast_vote_succeeds_one_second_before_deadline() {
+        let (env, _admin, client) = setup();
+        env.ledger()
+            .set_timestamp(1_000_000 + VOTING_WINDOW_SECS - 1);
+
+        let tally = client.cast_vote(&voter(&env), &1_u64, &VoteChoice::Yes);
+
+        assert_eq!(tally.yes_votes, 1);
+        assert_eq!(tally.total_voters, 1);
+    }
+
+    #[test]
+    fn cast_vote_rejects_at_deadline_without_changing_tally() {
+        let (env, _admin, client) = setup();
+        let initial = client.cast_vote(&voter(&env), &1_u64, &VoteChoice::Yes);
+        env.ledger()
+            .set_timestamp(1_000_000 + VOTING_WINDOW_SECS);
+
+        let err = client
+            .try_cast_vote(&voter(&env), &1_u64, &VoteChoice::No)
+            .expect_err("votes at the deadline must be rejected");
+
+        assert_eq!(err, Ok(PredictXError::VotingWindowExpired));
+        let stored = crate::storage::read_tally(&env, 1).unwrap();
+        assert_eq!(stored.yes_votes, initial.yes_votes);
+        assert_eq!(stored.no_votes, initial.no_votes);
+        assert_eq!(stored.unclear_votes, initial.unclear_votes);
+        assert_eq!(stored.total_voters, initial.total_voters);
+    }
+
+    #[test]
+    fn cast_vote_rejects_after_deadline() {
+        let (env, _admin, client) = setup();
+        env.ledger()
+            .set_timestamp(1_000_000 + VOTING_WINDOW_SECS + 1);
+
+        let err = client
+            .try_cast_vote(&voter(&env), &1_u64, &VoteChoice::No)
+            .expect_err("votes after the deadline must be rejected");
+
+        assert_eq!(err, Ok(PredictXError::VotingWindowExpired));
     }
 
     #[test]
