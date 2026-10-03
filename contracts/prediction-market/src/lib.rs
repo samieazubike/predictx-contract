@@ -23,7 +23,7 @@ use predictx_shared::{
     DataKey, Match, PlatformStats, Poll, PollCategory, PollStatus, PredictXError, Stake,
     StakeSide, MAX_POLLS_PER_MATCH,
     UserStats, MAX_POLLS_PER_MATCH,
-};
+, EMERGENCY_TIMEOUT_SECS};
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec};
 
 mod payouts;
@@ -500,7 +500,7 @@ pub(crate) fn set_user_poll_total_stake(env: &Env, poll_id: u64, user: &Address,
         .set(&DataKey::UserPollTotalStake(poll_id, user.clone()), &total);
 }
 
-const EMERGENCY_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
+// EMERGENCY_TIMEOUT_SECS is imported from predictx_shared::constants
 
 /// Poll statuses for which the oracle will never be consulted again.
 fn is_terminal_poll_status(status: PollStatus) -> bool {
