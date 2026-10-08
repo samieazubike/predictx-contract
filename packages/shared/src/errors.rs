@@ -70,19 +70,10 @@ pub enum PredictXError {
     TransferFailed = 32,
     /// Contract is paused.
     ContractPaused = 33,
-    /// Contract is paused.
-    ContractPaused = 33,
     /// Stake amount is below the minimum required.
     StakeBelowMinimum = 34,
-    /// Evidence string is invalid or empty.
-    InvalidEvidence = 35,
     /// The poll already has the maximum number of voters.
     MaxVotersReached = 35,
-    /// The poll's parent match has not finished yet.
-    MatchNotFinished = 36,
-    /// The poll already has the maximum number of voters.
-    MaxVotersReached = 35,
-    MaxVotersReached = 40,
     /// The voter did not back the winning outcome (including `Unclear`).
     VoterNotEligible = 36,
     /// The poll has no resolved outcome yet.
@@ -91,43 +82,60 @@ pub enum PredictXError {
     InvalidRewardAmount = 38,
     /// The requested poll status transition is not part of the legal graph.
     InvalidStateTransition = 39,
-    /// Caller did not vote on this poll and cannot claim a voter reward.
-    NotEligibleVoter = 36,
-    /// The dispute window has closed; the poll can no longer be disputed.
-    DisputeWindowClosed = 36,
-    /// The address supplied as the voting oracle is not a compatible oracle.
-    InvalidOracle = 39,
-    /// Oracle rotation was rejected because polls are still unresolved.
-    OracleRotationBlocked = 40,
-    /// A team name cannot be empty.
-    EmptyTeamName = 39,
-    /// A match string field exceeds the maximum allowed length.
-    MatchStringTooLong = 40,
     /// Stake amount is above the maximum allowed for a single stake.
     StakeAboveMaximum = 40,
     /// The stake is on the winning side but its payout rounds down to zero.
     PayoutRoundsToZero = 41,
+    /// Evidence string is invalid or empty.
+    InvalidEvidence = 42,
+    /// The poll's parent match has not finished yet.
+    MatchNotFinished = 43,
+    /// Caller did not vote on this poll and cannot claim a voter reward.
+    NotEligibleVoter = 44,
+    /// The dispute window has closed; the poll can no longer be disputed.
+    DisputeWindowClosed = 45,
+    /// The address supplied as the voting oracle is not a compatible oracle.
+    InvalidOracle = 46,
+    /// Oracle rotation was rejected because polls are still unresolved.
+    OracleRotationBlocked = 47,
+    /// A team name cannot be empty.
+    EmptyTeamName = 48,
+    /// A match string field exceeds the maximum allowed length.
+    MatchStringTooLong = 49,
     /// Duplicate address provided among required distinct addresses.
-    DuplicateAddress = 39,
+    DuplicateAddress = 50,
     /// Address is not a valid token contract.
-    InvalidTokenAddress = 40,
+    InvalidTokenAddress = 51,
     /// The token address cannot be changed while the contract holds a balance.
-    ContractBalanceNotZero = 39,
+    ContractBalanceNotZero = 52,
     /// No pending parameter proposal exists for this key.
-    ProposalNotFound = 39,
+    ProposalNotFound = 53,
     /// The timelock delay has not elapsed yet — too early to execute.
-    ProposalNotReady = 40,
+    ProposalNotReady = 54,
     /// A pending proposal already exists for this parameter key.
-    ProposalAlreadyExists = 41,
+    ProposalAlreadyExists = 55,
     /// The poll does not have enough escrowed funds to cover the requested outflow.
-    /// Returned before any token movement so one poll cannot spend another poll's stake.
-    InsufficientPollEscrow = 39,
+    InsufficientPollEscrow = 56,
     /// The requested poll status transition is not permitted.
-    InvalidPollStatusTransition = 39,
+    InvalidPollStatusTransition = 57,
     /// The platform fee exceeds the documented maximum.
-    PlatformFeeTooHigh = 39,
+    PlatformFeeTooHigh = 58,
     /// The stake would exceed the maximum cumulative stake for this poll.
-    MaxStakePerPollExceeded = 39,
+    MaxStakePerPollExceeded = 59,
+    /// An arithmetic operation in a contract calculation overflowed or was undefined.
+    ArithmeticOverflow = 60,
+    /// The stake would exceed a cumulative stake limit.
+    CumulativeStakeLimitExceeded = 61,
+    /// A poll question cannot be empty.
+    EmptyQuestion = 62,
+    /// The contract does not have enough escrowed funds for this transfer.
+    InsufficientEscrow = 63,
+    /// An amount is invalid.
+    InvalidAmount = 64,
+    /// The platform fee is invalid.
+    InvalidPlatformFee = 65,
+    /// The stake would exceed the configured limit.
+    StakeLimitExceeded = 66,
 }
 
 /// Schema version for the error discriminant layout.

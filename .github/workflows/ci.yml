@@ -95,7 +95,6 @@ jobs:
 
             - name: Run Clippy
               run: cargo clippy --all-targets -- -D warnings
-              run: cargo install --locked soroban-cli --version 22.6.0
 
             - name: Build all contracts (WASM)
               run: cargo build --target wasm32-unknown-unknown --release
