@@ -106,6 +106,10 @@ pub fn stake(
     let mut poll: Poll = load_poll(env, poll_id)
         .ok_or(PredictXError::PollNotFound)?;
 
+    if poll.outcome.is_some() || poll.outcome_source.is_some() {
+        return Err(PredictXError::PollAlreadyResolved);
+    }
+
     if poll.status != PollStatus::Active {
         return Err(PredictXError::PollNotActive);
     }

@@ -91,6 +91,8 @@ pub enum PredictXError {
     InvalidRewardAmount = 38,
     /// The requested poll status transition is not part of the legal graph.
     InvalidStateTransition = 39,
+    /// An admin resolution contradicts an outcome already recorded by the oracle.
+    ContradictoryOutcome = 40,
     /// Caller did not vote on this poll and cannot claim a voter reward.
     NotEligibleVoter = 36,
     /// The dispute window has closed; the poll can no longer be disputed.
@@ -183,6 +185,7 @@ mod tests {
         (36, PredictXError::VoterNotEligible),
         (37, PredictXError::OutcomeNotAvailable),
         (38, PredictXError::InvalidRewardAmount),
+        (40, PredictXError::ContradictoryOutcome),
     ];
 
     /// Round-trip decode test for the error enum: every discriminant must
@@ -203,10 +206,10 @@ mod tests {
     /// The golden fixture list must cover every discriminant exactly once.
     #[test]
     fn golden_error_discriminants_are_complete() {
-        let mut seen = [false; 39];
+        let mut seen = [false; 41];
         for (value, _) in GOLDEN_ERRORS.iter() {
             assert!(
-                *value >= 1 && *value <= 38,
+                *value >= 1 && *value <= 40,
                 "schema version {}: PredictXError discriminant {} out of range",
                 PREDICTX_ERROR_SCHEMA_VERSION,
                 *value

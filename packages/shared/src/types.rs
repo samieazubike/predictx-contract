@@ -55,6 +55,16 @@ pub enum StakeSide {
     No = 1,
 }
 
+/// Who supplied the final settlement for a poll.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PollOutcomeSource {
+    /// The community oracle auto-resolved the poll.
+    Oracle = 0,
+    /// An admin issued a final manual resolution.
+    Admin = 1,
+}
+
 /// A community voter's choice.
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -111,6 +121,8 @@ pub struct Poll {
     pub status: PollStatus,
     /// `None` until resolved; `Some(true)` = Yes won, `Some(false)` = No won.
     pub outcome: Option<bool>,
+    /// Which authority settled the poll.
+    pub outcome_source: Option<PollOutcomeSource>,
     /// Address that finalized the poll outcome.
     pub resolver: Option<Address>,
     /// Evidence or rationale reference supplied at resolution time.
