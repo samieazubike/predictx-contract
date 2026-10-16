@@ -12,17 +12,9 @@ pub(crate) mod token_utils;
 mod e2e;
 
 use predictx_shared::{
-    Match, PlatformStats, Poll, PollCategory, PollStatus, PredictXError, Stake, StakeSide,
-    UserStats, BPS_DENOMINATOR, MAX_POLLS_PER_MATCH,
-    DataKey, Match, PlatformStats, Poll, PollCategory, PollStatus, PredictXError, Stake, StakeSide,
-    MAX_POLLS_PER_MATCH,
-    MAX_POLLS_PER_MATCH, MAX_QUESTION_LENGTH,
-    Match, ParamKey, ParamProposal, PlatformStats, Poll, PollCategory, PollStatus, PredictXError,
-    Stake, StakeSide, MAX_POLLS_PER_MATCH, PARAM_TIMELOCK_DELAY,
-    UserStats, MAX_POLLS_PER_MATCH,
-    DataKey, Match, PlatformStats, Poll, PollCategory, PollStatus, PredictXError, Stake,
-    StakeSide, MAX_POLLS_PER_MATCH,
-    UserStats, MAX_POLLS_PER_MATCH,
+    DataKey, Match, ParamKey, ParamProposal, PlatformStats, Poll, PollCategory,
+    PollOutcomeSource, PollStatus, PredictXError, Stake, StakeSide, UserStats,
+    BPS_DENOMINATOR, MAX_POLLS_PER_MATCH, MAX_QUESTION_LENGTH, PARAM_TIMELOCK_DELAY,
 };
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec};
 
@@ -866,6 +858,37 @@ impl PredictionMarket {
         Ok(map_oracle_poll_status(client.get_poll_status(&poll_id)))
     }
 
+    fn sync_oracle_outcome(env: &Env, poll_id: u64) -> Result<Option<bool>, PredictXError> {
+        let oracle_id = get_oracle(env)?;
+        let client = voting_oracle::Client::new(env, &oracle_id);
+        if client.get_poll_status(&poll_id) != voting_oracle::PollStatus::Resolved {
+            return Ok(None);
+        }
+
+        let mut poll = load_poll(env, poll_id).ok_or(PredictXError::PollNotFound)?;
+        let outcome = match client.get_poll_outcome(&poll_id) {
+            voting_oracle::VoteChoice::Yes => true,
+            voting_oracle::VoteChoice::No => false,
+            voting_oracle::VoteChoice::Unclear => {
+                return Err(PredictXError::InvalidOutcome);
+            }
+        };
+
+        if poll.outcome.is_some() {
+            if poll.outcome != Some(outcome) {
+                return Err(PredictXError::ContradictoryOutcome);
+            }
+            return Ok(Some(outcome));
+        }
+
+        poll.status = PollStatus::Resolved;
+        poll.outcome = Some(outcome);
+        poll.outcome_source = Some(PollOutcomeSource::Oracle);
+        poll.resolution_time = env.ledger().timestamp();
+        store_poll(env, &poll);
+        Ok(Some(outcome))
+    }
+
     /// Cancel a poll, unlocking emergency refunds for every staker.
     ///
     /// The local poll record is the source of truth for status, so the poll
@@ -1243,10 +1266,20 @@ impl PredictionMarket {
     }
 
     pub fn get_poll(env: Env, poll_id: u64) -> Result<Poll, PredictXError> {
-        env.storage()
+        let mut poll = env
+            .storage()
             .persistent()
             .get(&DataKey::Poll(poll_id))
-            .ok_or(PredictXError::PollNotFound)
+            .ok_or(PredictXError::PollNotFound)?;
+        if poll.outcome.is_none() {
+            let _ = sync_oracle_outcome(&env, poll_id)?;
+            poll = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Poll(poll_id))
+                .ok_or(PredictXError::PollNotFound)?;
+        }
+        Ok(poll)
     }
 
     /// Resolve a poll with a boolean outcome. Callable only by the registered
@@ -1748,16 +1781,67 @@ impl PredictionMarket {
         resolution_basis: String,
     ) -> Result<(), PredictXError> {
         extend_instance_ttl(&env);
-        payouts::resolve_poll(&env, admin, poll_id, outcome)
-        payouts::resolve_poll(&env, caller, poll_id, outcome)
-        payouts::resolve_poll(&env, admin, poll_id, outcome, resolution_basis)
+        require_initialized(&env)?;
+        ensure_not_paused(&env)?;
+        caller.require_auth();
+
+        let admin = get_admin(&env)?;
+        if caller != admin {
+            return Err(PredictXError::Unauthorized);
+        }
+
+        let mut poll: Poll = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Poll(poll_id))
+            .ok_or(PredictXError::PollNotFound)?;
+
+        if let Some(existing) = poll.outcome {
+            if poll.outcome_source == Some(PollOutcomeSource::Oracle) && existing != outcome {
+                return Err(PredictXError::ContradictoryOutcome);
+            }
+            return Err(PredictXError::PollAlreadyResolved);
+        }
+
+        let oracle_status = {
+            let oracle_id = get_oracle(&env)?;
+            let client = voting_oracle::Client::new(&env, &oracle_id);
+            client.get_poll_status(&poll_id)
+        };
+        if oracle_status == voting_oracle::PollStatus::Resolved {
+            let oracle_outcome = match {
+                let oracle_id = get_oracle(&env)?;
+                let client = voting_oracle::Client::new(&env, &oracle_id);
+                client.get_poll_outcome(&poll_id)
+            } {
+                voting_oracle::VoteChoice::Yes => true,
+                voting_oracle::VoteChoice::No => false,
+                voting_oracle::VoteChoice::Unclear => return Err(PredictXError::InvalidOutcome),
+            };
+            if oracle_outcome != outcome {
+                return Err(PredictXError::ContradictoryOutcome);
+            }
+            poll.outcome = Some(oracle_outcome);
+            poll.outcome_source = Some(PollOutcomeSource::Oracle);
+        } else {
+            poll.outcome = Some(outcome);
+            poll.outcome_source = Some(PollOutcomeSource::Admin);
+            poll.resolver = Some(caller.clone());
+            poll.resolution_basis = Some(resolution_basis);
+        }
+        poll.status = PollStatus::Resolved;
+        poll.resolution_time = env.ledger().timestamp();
+        env.storage().persistent().set(&DataKey::Poll(poll_id), &poll);
+        Ok(())
+    }
+
     pub fn resolve_poll(
         env: Env,
         admin: Address,
         poll_id: u64,
         outcome: bool,
     ) -> Result<(), PredictXError> {
-        payouts::resolve_poll(&env, admin, poll_id, outcome)
+        admin_resolve_poll(env, admin, poll_id, outcome, String::from_str(&env, "admin"))
     }
 
     /// Claim winnings after a resolved poll.

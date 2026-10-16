@@ -1560,43 +1560,117 @@ mod test {
     /// single claimant.
     #[test]
     fn payouts_never_exceed_the_pool() {
-        let s = setup();
-        let poll_id: u64 = 500;
-        let yes_pool: i128 = 33_333_331;
-        let no_pool: i128 = 66_666_667;
-        let amounts: [i128; 3] = [11_111_111, 11_111_110, 11_111_110];
-        let pot: i128 = yes_pool + no_pool;
-
-        let treasury = s.client.get_treasury_address();
-        mint_tokens(&s, &s.contract_id, pot);
-        inject_resolved_poll(&s, poll_id, true, yes_pool, no_pool);
-
-        let mut winners: Vec<Address> = Vec::new(&s.env);
-        for amount in amounts {
-            let user = Address::generate(&s.env);
-            inject_stake(&s, poll_id, &user, amount, StakeSide::Yes);
-            winners.push_back(user);
+        struct FixedRng {
+            state: u64,
         }
 
-        for i in 0..amounts.len() as u32 {
-            let claimed = s.client.claim_winnings(&winners.get(i).unwrap(), &poll_id);
+        impl FixedRng {
+            fn new(seed: u64) -> Self {
+                Self { state: seed }
+            }
+
+            fn next_u64(&mut self) -> u64 {
+                self.state = self
+                    .state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                self.state
+            }
+
+            fn next_i128(&mut self, min: i128, max: i128) -> i128 {
+                let range = (max - min + 1) as u128;
+                let offset = (self.next_u64() as u128 % range) as i128;
+                min + offset
+            }
+
+            fn next_bool(&mut self) -> bool {
+                (self.next_u64() & 1) == 1
+            }
+        }
+
+        let mut rng = FixedRng::new(0xC0FFEE_1234_5678);
+
+        for scenario in 0..60 {
+            let s = setup();
+            let poll_id: u64 = 500 + scenario as u64;
+            let outcome_yes = rng.next_bool();
+            let winning_side = if outcome_yes { StakeSide::Yes } else { StakeSide::No };
+            let losing_side = if outcome_yes { StakeSide::No } else { StakeSide::Yes };
+            let force_single_staker = scenario % 9 == 0;
+
+            let mut winners: Vec<Address> = Vec::new(&s.env);
+            let mut yes_pool = 0_i128;
+            let mut no_pool = 0_i128;
+            let mut total_staked = 0_i128;
+
+            let winner_count = if force_single_staker {
+                1
+            } else {
+                1 + (rng.next_u64() % 6) as usize
+            };
+            let loser_count = if scenario % 11 == 0 {
+                0
+            } else {
+                (rng.next_u64() % 6) as usize
+            };
+
+            for _ in 0..winner_count {
+                let amount = if force_single_staker {
+                    100_000 + (rng.next_u64() % 7_500_000) as i128
+                } else {
+                    rng.next_i128(100_000, 7_500_000)
+                };
+                let user = Address::generate(&s.env);
+                inject_stake(&s, poll_id, &user, amount, winning_side);
+                winners.push_back(user.clone());
+                total_staked += amount;
+                if outcome_yes {
+                    yes_pool += amount;
+                } else {
+                    no_pool += amount;
+                }
+            }
+
+            for _ in 0..loser_count {
+                let amount = rng.next_i128(100_000, 3_500_000);
+                let user = Address::generate(&s.env);
+                inject_stake(&s, poll_id, &user, amount, losing_side);
+                total_staked += amount;
+                if outcome_yes {
+                    no_pool += amount;
+                } else {
+                    yes_pool += amount;
+                }
+            }
+
+            let treasury = s.client.get_treasury_address();
+            mint_tokens(&s, &s.contract_id, total_staked);
+            inject_resolved_poll(&s, poll_id, outcome_yes, yes_pool, no_pool);
+
+            let mut total_paid = 0_i128;
+            for i in 0..winners.len() {
+                let winner = winners.get(i).unwrap();
+                let claimed = s.client.claim_winnings(&winner, &poll_id);
+                assert_eq!(
+                    claimed,
+                    s.client.calculate_winnings(&poll_id, &winner),
+                    "fund-loss bug: payouts plus fees never exceed the total staked"
+                );
+                total_paid += claimed;
+            }
+
+            let fee_total = token_balance(&s, &treasury);
+            let paid = total_paid + fee_total;
+            assert!(
+                paid <= total_staked,
+                "fund-loss bug: payouts plus fees never exceed the total staked"
+            );
             assert_eq!(
-                claimed,
-                s.client
-                    .calculate_winnings(&poll_id, &winners.get(i).unwrap())
+                token_balance(&s, &s.contract_id) + paid,
+                total_staked,
+                "fund-loss bug: payouts plus fees never exceed the total staked"
             );
         }
-
-        let paid = token_balance(&s, &winners.get(0).unwrap())
-            + token_balance(&s, &winners.get(1).unwrap())
-            + token_balance(&s, &winners.get(2).unwrap())
-            + token_balance(&s, &treasury);
-        assert!(paid <= pot, "payouts plus fees must stay inside the pot");
-        assert_eq!(
-            token_balance(&s, &s.contract_id) + paid,
-            pot,
-            "every base unit is either paid out or still held"
-        );
     }
 }
 
