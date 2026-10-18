@@ -1,3 +1,6 @@
 /target
 test_snapshots/
 contracts/**/wasm/
+
+# Never track editor auto-run tasks (malware was once planted via one).
+.vscode/tasks.json
