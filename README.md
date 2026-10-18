@@ -41,7 +41,7 @@ A shared types crate (`predictx-shared`) provides common data structures, error 
 - **Blockchain**: Stellar (Soroban)
 - **Language**: Rust
 - **SDK**: `soroban-sdk 22.0.0`
-- **Target**: `wasm32-unknown-unknown`
+- **Target**: `wasm32v1-none` (Soroban rejects `wasm32-unknown-unknown` on Rust 1.82+)
 - **Toolchain**: Stable Rust
 
 ## Workspace Layout
@@ -70,17 +70,17 @@ predictx-contract/
 ## Prerequisites
 
 - [Rust](https://rustup.rs/) (stable)
-- Soroban CLI 22.6.0 — `cargo install --locked soroban-cli --version 22.6.0`
-- `wasm32-unknown-unknown` target — `rustup target add wasm32-unknown-unknown`
+- Stellar CLI (optional, for deployment) — `cargo install --locked stellar-cli`
+- `wasm32v1-none` target — `rustup target add wasm32v1-none`
 
 ## Building
 
 ```bash
 # Build all contracts
-cargo build --target wasm32-unknown-unknown --release
+cargo build --target wasm32v1-none --release
 
 # Build with debug logs (for testnet)
-cargo build --target wasm32-unknown-unknown --profile release-with-logs
+cargo build --target wasm32v1-none --profile release-with-logs
 ```
 
 ## Testing

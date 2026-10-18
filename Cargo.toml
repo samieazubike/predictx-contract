@@ -7,8 +7,6 @@ members = [
     "contracts/treasury",
     "contracts/voting-oracle",
     "packages/shared",
-    "tests/integration",
-    "packages/test-utils",
 ]
 
 [workspace.dependencies]

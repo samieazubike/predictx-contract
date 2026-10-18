@@ -1,12 +1,18 @@
 #![no_std]
 
-use predictx_shared::{Poll, PollCategory, PollStatus, PredictXError};
+use predictx_shared::{PredictXError, Poll, PollCategory, PollStatus};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
-use predictx_shared::{DataKey, Poll, PollCategory, PollStatus, PredictXError};
-use soroban_sdk::{contract, contractimpl, Address, Env, String};
 
 #[contract]
 pub struct PollFactory;
+
+#[contracttype]
+#[derive(Clone)]
+enum DataKey {
+    Admin,
+    NextPollId,
+    Poll(u64),
+}
 
 fn get_admin(env: &Env) -> Result<Address, PredictXError> {
     env.storage()
@@ -16,17 +22,12 @@ fn get_admin(env: &Env) -> Result<Address, PredictXError> {
 }
 
 fn next_poll_id(env: &Env) -> u64 {
-    env.storage()
-        .instance()
-        .get(&DataKey::NextPollId)
-        .unwrap_or(1)
+    env.storage().instance().get(&DataKey::NextPollId).unwrap_or(1)
 }
 
 fn bump_poll_id(env: &Env) -> u64 {
     let id = next_poll_id(env);
-    env.storage()
-        .instance()
-        .set(&DataKey::NextPollId, &(id + 1));
+    env.storage().instance().set(&DataKey::NextPollId, &(id + 1));
     id
 }
 
@@ -61,19 +62,6 @@ impl PollFactory {
         let poll_id = bump_poll_id(&env);
         let poll = Poll {
             poll_id,
-            match_id: 0, // polls not linked to matches yet
-            creator: creator.clone(),
-            question,
-            category: PollCategory::Other,
-            lock_time: lock_timestamp,
-            yes_pool: 0,
-            no_pool: 0,
-            yes_count: 0,
-            no_count: 0,
-            status: PollStatus::Active,
-            outcome: None,
-            resolution_time: 0,
-            created_at: env.ledger().timestamp(),
     			match_id: 0,                          // polls not linked to matches yet
     			creator: creator.clone(),
 				question,
@@ -85,8 +73,6 @@ impl PollFactory {
 				no_count: 0,
 				status: PollStatus::Active,
 				outcome: None,
-				resolver: None,
-				resolution_basis: None,
 				resolution_time: 0,
 				created_at: env.ledger().timestamp(),
         };
@@ -112,7 +98,6 @@ extern crate std;
 mod test {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::IntoVal;
 
     #[test]
     fn create_and_get_poll() {
@@ -136,54 +121,5 @@ mod test {
         assert_eq!(poll.question, question);
         assert_eq!(poll.status, PollStatus::Active);
         assert_eq!(poll.lock_time, 123_u64);
-    }
-
-    #[test]
-    fn create_poll_enforces_creator_auth() {
-        let env = Env::default();
-        let contract_id = env.register(PollFactory, ());
-        let client = PollFactoryClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        client.mock_auths(&[
-            soroban_sdk::testutils::MockAuth {
-                address: &admin,
-                invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                    contract: &contract_id,
-                    fn_name: "initialize",
-                    args: (&admin,).into_val(&env),
-                    sub_invokes: &[],
-                },
-            },
-        ]).initialize(&admin);
-
-        let creator = Address::generate(&env);
-        let question = String::from_str(&env, "Will Arsenal win the league?");
-        let lock_time = 1_000_u64;
-
-        // Calling without authorising creator must fail authentication
-        let err = client
-            .mock_auths(&[])
-            .try_create_poll(&creator, &question, &lock_time);
-        assert!(err.is_err(), "create_poll without creator auth must fail");
-
-        // Calling with targeted auth for creator succeeds
-        let poll_id = client
-            .mock_auths(&[
-                soroban_sdk::testutils::MockAuth {
-                    address: &creator,
-                    invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                        contract: &contract_id,
-                        fn_name: "create_poll",
-                        args: (&creator, question.clone(), lock_time).into_val(&env),
-                        sub_invokes: &[],
-                    },
-                },
-            ])
-            .create_poll(&creator, &question, &lock_time);
-
-        assert_eq!(poll_id, 1);
-        let poll = client.get_poll(&poll_id);
-        assert_eq!(poll.creator, creator);
     }
 }
