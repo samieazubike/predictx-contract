@@ -1,16 +1,5 @@
 use soroban_sdk::{contracttype, Address, String};
 
-// ── Schema version ────────────────────────────────────────────────────────────
-
-/// Version marker for the on-chain XDR schema of all stored types in this
-/// module. Bump this whenever a stored struct or key enum changes shape
-/// (field added, removed, reordered, or retyped). The golden XDR fixtures in
-/// the round-trip tests below pin the exact encoding; if you change a stored
-/// type without bumping this constant, CI fails with an explicit
-/// schema-version mismatch message so already-stored records are never
-/// silently made undecodable.
-pub const STORAGE_SCHEMA_VERSION: u32 = 1;
-
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
 /// Lifecycle state of a poll.
@@ -72,13 +61,13 @@ pub enum VoteChoice {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Match {
     pub match_id: u64,
-    /// Home team name (max 256 bytes, non-empty).
+    /// Home team name (max 256 bytes).
     pub home_team: String,
-    /// Away team name (max 256 bytes, non-empty).
+    /// Away team name (max 256 bytes).
     pub away_team: String,
-    /// League or competition name (max 256 bytes).
+    /// League or competition name.
     pub league: String,
-    /// Stadium / venue name (max 256 bytes).
+    /// Stadium / venue name.
     pub venue: String,
     /// Unix timestamp for kick-off.
     pub kickoff_time: u64,
@@ -111,16 +100,10 @@ pub struct Poll {
     pub status: PollStatus,
     /// `None` until resolved; `Some(true)` = Yes won, `Some(false)` = No won.
     pub outcome: Option<bool>,
-    /// Address that finalized the poll outcome.
-    pub resolver: Option<Address>,
-    /// Evidence or rationale reference supplied at resolution time.
-    pub resolution_basis: Option<String>,
     /// Unix timestamp when the poll was resolved.
     pub resolution_time: u64,
     /// Unix timestamp when the poll was created.
     pub created_at: u64,
-    /// Total amount escrowed for this poll (yes_pool + no_pool).
-    pub escrow: i128,
 }
 
 /// A single user's stake on a poll.
@@ -178,19 +161,6 @@ pub struct PlatformStats {
     pub total_users: u64,
 }
 
-/// Per-poll escrow / liability view.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PollEscrow {
-    pub poll_id: u64,
-    /// Total tokens escrowed for this poll.
-    pub escrowed: i128,
-    /// Cumulative amount already paid out from this poll's escrow.
-    pub paid_out: i128,
-    /// Maximum cumulative outflow allowed (pool + fee).
-    pub max_outflow: i128,
-}
-
 /// Per-user activity statistics.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -203,44 +173,4 @@ pub struct UserStats {
     pub polls_lost: u32,
     pub votes_cast: u32,
     pub voting_rewards_earned: i128,
-}
-
-// ── Parameter timelock types ──────────────────────────────────────────────────
-
-/// Identifies a platform parameter that can be changed via the timelock mechanism.
-///
-/// Each variant maps to a concrete storage key + apply logic inside `execute_param`.
-/// Adding a new settable parameter only requires adding a variant here and a match
-/// arm in `execute_param` — no other contract plumbing changes.
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ParamKey {
-    /// Platform fee expressed in basis points (e.g. `500` = 5 %).
-    PlatformFeeBps = 0,
-}
-
-/// A pending proposal to change a platform parameter after a timelock delay.
-///
-/// Created by `propose_param`, readable via `get_param_proposal`, applied by
-/// `execute_param` (only after `execute_after` has passed), and discarded by
-/// `cancel_param`.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ParamProposal {
-    /// Which parameter this proposal targets.
-    pub key: ParamKey,
-    /// The new value to apply, encoded as `u64`.
-    ///
-    /// All currently supported parameters fit comfortably in `u64`.  If a future
-    /// parameter needs a different type it can be added as a separate entry point.
-    pub value: u64,
-    /// Unix timestamp after which `execute_param` is permitted.
-    pub execute_after: u64,
-    /// Unix timestamp when this proposal was created.
-    pub proposed_at: u64,
-    /// Admin address that submitted the proposal.
-    pub proposer: Address,
-}
-    /// Contract that owns and mutates this record (voting-oracle).
-    pub stats_owner: Address,
 }

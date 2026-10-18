@@ -1,12 +1,6 @@
 use soroban_sdk::{token, Address, Env};
-use predictx_shared::{DataKey, PredictXError};
-use crate::DataKey;
 use predictx_shared::PredictXError;
-use soroban_sdk::{token, Address, Env};
-use crate::storage::get_poll_escrow;
 use crate::DataKey;
-use predictx_shared::PredictXError;
-use soroban_sdk::{token, Address, Env};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -22,7 +16,7 @@ pub fn get_token_address(env: &Env) -> Result<Address, PredictXError> {
 pub fn get_treasury_address(env: &Env) -> Result<Address, PredictXError> {
     env.storage()
         .instance()
-        .get(&DataKey::MarketTreasuryAddress)
+        .get(&DataKey::TreasuryAddress)
         .ok_or(PredictXError::NotInitialized)
 }
 
@@ -42,28 +36,8 @@ pub fn get_platform_fee_bps(env: &Env) -> u32 {
 pub fn transfer_to_contract(env: &Env, from: &Address, amount: i128) -> Result<(), PredictXError> {
     let token_addr = get_token_address(env)?;
     let client = token::Client::new(env, &token_addr);
-    client
-        .try_transfer(from, &env.current_contract_address(), &amount)
-        .map_err(|_| PredictXError::TransferFailed)?
-        .map_err(|_| PredictXError::TransferFailed)
-}
-
-/// Transfer tokens **from** this contract **to** a recipient, bounded by the
-/// escrow reserved for a specific poll.
-///
-/// Fails with `PredictXError::InsufficientEscrow` if `amount` exceeds the
-/// poll's remaining escrow, and moves no tokens in that case.
-pub fn transfer_from_poll_escrow(
-    env: &Env,
-    poll_id: u64,
-    to: &Address,
-    amount: i128,
-) -> Result<(), PredictXError> {
-    let escrow = get_poll_escrow(env, poll_id);
-    if amount > escrow {
-        return Err(PredictXError::InsufficientEscrow);
-    }
-    transfer_from_contract(env, to, amount)
+    client.transfer(from, &env.current_contract_address(), &amount);
+    Ok(())
 }
 
 /// Transfer tokens **from** this contract **to** a recipient.
@@ -72,10 +46,8 @@ pub fn transfer_from_poll_escrow(
 pub fn transfer_from_contract(env: &Env, to: &Address, amount: i128) -> Result<(), PredictXError> {
     let token_addr = get_token_address(env)?;
     let client = token::Client::new(env, &token_addr);
-    client
-        .try_transfer(&env.current_contract_address(), to, &amount)
-        .map_err(|_| PredictXError::TransferFailed)?
-        .map_err(|_| PredictXError::TransferFailed)
+    client.transfer(&env.current_contract_address(), to, &amount);
+    Ok(())
 }
 
 /// Transfer tokens **from** this contract **to** the treasury address.
@@ -89,19 +61,4 @@ pub fn get_balance(env: &Env) -> Result<i128, PredictXError> {
     let token_addr = get_token_address(env)?;
     let client = token::Client::new(env, &token_addr);
     Ok(client.balance(&env.current_contract_address()))
-}
-
-/// Get the total escrow reserved across all polls.
-///
-/// This should reconcile with `get_balance` minus any unallocated funds.
-pub fn get_total_escrow(env: &Env) -> Result<i128, PredictXError> {
-    let token_addr = get_token_address(env)?;
-    let client = token::Client::new(env, &token_addr);
-    let balance = client.balance(&env.current_contract_address());
-    let unallocated = env
-        .storage()
-        .instance()
-        .get(&DataKey::UnallocatedBalance)
-        .unwrap_or(0i128);
-    Ok(balance - unallocated)
 }

@@ -1,11 +1,19 @@
 use std::{
-    env, fs,
+    env,
+    fs,
     path::{Path, PathBuf},
     process::Command,
 };
 
+/// Soroban-compatible wasm target. On Rust 1.82+ `wasm32-unknown-unknown`
+/// enables reference-types/multi-value, which soroban-sdk rejects at build time.
+const WASM_TARGET: &str = "wasm32v1-none";
+
 fn workspace_root(manifest_dir: &Path) -> PathBuf {
-    manifest_dir.join("../..")
+    manifest_dir
+        .join("../..")
+        .canonicalize()
+        .expect("failed to resolve workspace root")
 }
 
 fn main() {
@@ -32,7 +40,7 @@ fn main() {
             "-p",
             "voting-oracle",
             "--target",
-            "wasm32-unknown-unknown",
+            WASM_TARGET,
             "--release",
             "--target-dir",
             nested_target_dir
@@ -47,7 +55,7 @@ fn main() {
     }
 
     let built_wasm = nested_target_dir
-        .join("wasm32-unknown-unknown")
+        .join(WASM_TARGET)
         .join("release")
         .join("voting_oracle.wasm");
     fs::copy(&built_wasm, &out_wasm).expect("failed to copy voting-oracle wasm for contractimport");
