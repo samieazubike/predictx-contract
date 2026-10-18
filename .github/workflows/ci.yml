@@ -13,21 +13,36 @@ jobs:
             - name: Checkout repository
               uses: actions/checkout@v4
 
-            - name: Install system dependencies
-              run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
-
+            # Soroban rejects wasm32-unknown-unknown on Rust 1.82+; wasm32v1-none
+            # is the supported contract target (see rust-toolchain.toml).
             - name: Install Rust toolchain
-              uses: dtolnay/rust-toolchain@1.82.0
+              uses: dtolnay/rust-toolchain@stable
               with:
-                  toolchain: "1.82.0"
-                  target: wasm32-unknown-unknown
-                  override: true
+                  targets: wasm32v1-none
+                  components: clippy
 
-            - name: Install Soroban CLI
-              run: cargo install --locked soroban-cli --version 22.6.0
+            - name: Cache cargo artifacts
+              uses: Swatinem/rust-cache@v2
+
+            - name: Clippy
+              run: cargo clippy --workspace --all-targets -- -D warnings
 
             - name: Build all contracts (WASM)
-              run: cargo build --target wasm32-unknown-unknown --release
+              run: cargo build --workspace --target wasm32v1-none --release
 
             - name: Run tests
-              run: cargo test --all -- --nocapture
+              run: cargo test --workspace
+
+            - name: Dependency audit
+              run: |
+                  cargo install --locked cargo-audit
+                  cargo audit
+
+            # Editor auto-run tasks were used to plant malware in this repo once
+            # (see commit history); fail fast if one reappears.
+            - name: Reject editor auto-run tasks
+              run: |
+                  if git ls-files | grep -E '^\.vscode/(tasks|settings)\.json$'; then
+                      echo "::error::.vscode tasks/settings must not be committed"
+                      exit 1
+                  fi

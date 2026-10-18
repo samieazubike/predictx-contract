@@ -67,6 +67,7 @@ pub fn create_match(
     Ok(match_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn update_match(
     env: &Env,
     admin: Address,

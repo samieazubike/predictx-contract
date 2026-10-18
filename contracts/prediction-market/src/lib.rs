@@ -1,4 +1,7 @@
 #![no_std]
+// `update_match` mirrors the Match fields as optional arguments; the lint also
+// fires on the client code `#[contractimpl]` generates for it.
+#![allow(clippy::too_many_arguments)]
 
 mod matches;
 mod payouts;
@@ -327,7 +330,7 @@ impl PredictionMarket {
             return Err(PredictXError::MatchAlreadyStarted);
         }
 
-        if question.len() == 0 || question.len() > MAX_QUESTION_LENGTH {
+        if question.is_empty() || question.len() > MAX_QUESTION_LENGTH {
             return Err(PredictXError::PollQuestionTooLong);
         }
 
@@ -645,13 +648,13 @@ mod test {
         let tok = Address::generate(&env);
         let treasury = Address::generate(&env);
         client.initialize(&admin, &oracle, &tok, &treasury, &TEST_FEE_BPS);
-        assert_eq!(client.is_paused(), false);
+        assert!(!client.is_paused());
         client.pause(&admin);
-        assert_eq!(client.is_paused(), true);
+        assert!(client.is_paused());
         let err = client.try_set_oracle(&oracle).expect_err("should be blocked");
         assert_eq!(err, Ok(PredictXError::ContractPaused));
         client.unpause(&admin);
-        assert_eq!(client.is_paused(), false);
+        assert!(!client.is_paused());
     }
 
     #[test]
