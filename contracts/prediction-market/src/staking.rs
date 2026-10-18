@@ -54,6 +54,17 @@ pub fn stake(
         return Err(PredictXError::AlreadyStaked);
     }
 
+    match side {
+        StakeSide::Yes => {
+            poll.yes_pool = poll.yes_pool.checked_add(amount).ok_or(PredictXError::ArithmeticOverflow)?;
+            poll.yes_count = poll.yes_count.checked_add(1).ok_or(PredictXError::ArithmeticOverflow)?;
+        }
+        StakeSide::No => {
+            poll.no_pool = poll.no_pool.checked_add(amount).ok_or(PredictXError::ArithmeticOverflow)?;
+            poll.no_count = poll.no_count.checked_add(1).ok_or(PredictXError::ArithmeticOverflow)?;
+        }
+    }
+
     // ── Interactions ──────────────────────────────────────────────────────────
 
     token_utils::transfer_to_contract(env, &staker, amount)?;
@@ -77,17 +88,7 @@ pub fn stake(
         .persistent()
         .set(&DataKey::HasStaked(poll_id, staker.clone()), &true);
 
-    // Update pool totals
-    match side {
-        StakeSide::Yes => {
-            poll.yes_pool += amount;
-            poll.yes_count += 1;
-        }
-        StakeSide::No => {
-            poll.no_pool += amount;
-            poll.no_count += 1;
-        }
-    }
+    // Persist updated pool totals
     env.storage()
         .persistent()
         .set(&DataKey::Poll(poll_id), &poll);
@@ -105,8 +106,8 @@ pub fn stake(
 
     // Update platform stats
     let mut stats = get_platform_stats(env);
-    stats.total_value_locked += amount;
-    stats.total_stakes_placed += 1;
+    stats.total_value_locked = stats.total_value_locked.saturating_add(amount);
+    stats.total_stakes_placed = stats.total_stakes_placed.saturating_add(1);
     set_platform_stats(env, &stats);
 
     // Emit event
@@ -174,15 +175,21 @@ pub fn calculate_potential_winnings(
         StakeSide::No => poll.no_pool,
     };
 
-    let pool_on_side_after = pool_on_side + amount;
-    let total_pool_after = poll.yes_pool + poll.no_pool + amount;
+    let overflow = PredictXError::ArithmeticOverflow;
+    let pool_on_side_after = pool_on_side.checked_add(amount).ok_or(overflow)?;
+    let total_pool_after = poll
+        .yes_pool
+        .checked_add(poll.no_pool)
+        .and_then(|t| t.checked_add(amount))
+        .ok_or(overflow)?;
 
-    let fee_bps = token_utils::get_platform_fee_bps(env);
+    let fee_bps = token_utils::get_platform_fee_bps(env).min(BPS_DENOMINATOR);
     let fee_factor = (BPS_DENOMINATOR - fee_bps) as i128;
     let bps = BPS_DENOMINATOR as i128;
 
     // winnings = (amount / pool_on_side_after) * total_pool_after * (1 - fee%)
-    let winnings = amount * total_pool_after * fee_factor / (pool_on_side_after * bps);
+    let gross = amount.checked_mul(total_pool_after).ok_or(overflow)? / pool_on_side_after;
+    let winnings = gross.checked_mul(fee_factor).ok_or(overflow)? / bps;
 
     Ok(winnings)
 }
