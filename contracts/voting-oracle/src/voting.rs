@@ -16,7 +16,8 @@ use soroban_sdk::{Address, Env, Symbol};
 /// 5. Persists the updated tally and the per-voter dedup marker, and returns
 ///    the tally.
 ///
-/// Out of scope for this change (tracked in separate issues): excluding stakers.
+/// Votes are rejected once the voting window has closed, and — when a market
+/// is registered via `set_market` — from anyone who staked on the poll.
 pub fn cast_vote(
     env: &Env,
     voter: Address,
@@ -40,6 +41,24 @@ pub fn cast_vote(
         return Err(PredictXError::VotingNotOpen);
     }
 
+    let voting_end_time = crate::read_poll_status_updated_at(env, poll_id)
+        .checked_add(VOTING_WINDOW_SECS)
+        .unwrap_or(0);
+    if env.ledger().timestamp() >= voting_end_time {
+        return Err(PredictXError::VotingWindowExpired);
+    }
+
+    // Stakers have a financial interest in the outcome and may not vote on it.
+    if let Some(market) = env
+        .storage()
+        .instance()
+        .get::<DataKey, Address>(&DataKey::Market)
+    {
+        if crate::MarketClient::new(env, &market).has_user_staked(&poll_id, &voter) {
+            return Err(PredictXError::VoterIsStaker);
+        }
+    }
+
     // Each address may vote at most once per poll.
     let mut voters = storage::read_voters(env, poll_id);
     if storage::has_voted(env, poll_id, &voter) || voters.contains(voter.clone()) {
@@ -59,9 +78,7 @@ pub fn cast_vote(
         no_votes: 0,
         unclear_votes: 0,
         total_voters: 0,
-        voting_end_time: crate::read_poll_status_updated_at(env, poll_id)
-            .checked_add(VOTING_WINDOW_SECS)
-            .unwrap_or(0),
+        voting_end_time,
         reward_pool: 0,
     });
 
@@ -680,5 +697,67 @@ mod test {
             .try_claim_reward(&winner, &1_u64)
             .expect_err("a second claim must be rejected");
         assert_eq!(twice, Ok(PredictXError::AlreadyClaimed));
+    }
+
+    // ── Security regressions ─────────────────────────────────────────────────
+
+    #[test]
+    fn cast_vote_rejects_after_voting_window_closes() {
+        let (env, _, client) = setup();
+        env.ledger()
+            .with_mut(|l| l.timestamp += VOTING_WINDOW_SECS);
+        let err = client
+            .try_cast_vote(&voter(&env), &1_u64, &VoteChoice::Yes)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, PredictXError::VotingWindowExpired);
+    }
+
+    #[test]
+    fn late_vote_cannot_reset_tally_and_decide_alone() {
+        // Before the fix a stalled tally could be re-seeded by a late voter
+        // whose single vote then cleared the auto-resolve threshold.
+        let (env, _, client) = setup();
+        for _ in 0..5 {
+            client.cast_vote(&voter(&env), &1_u64, &VoteChoice::No);
+        }
+        env.ledger()
+            .with_mut(|l| l.timestamp += VOTING_WINDOW_SECS + 1);
+        let err = client
+            .try_cast_vote(&voter(&env), &1_u64, &VoteChoice::Yes)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, PredictXError::VotingWindowExpired);
+        assert_eq!(client.auto_resolve(&1_u64), VoteChoice::No);
+    }
+
+    #[test]
+    fn tally_survives_past_temporary_storage_ttl() {
+        let (env, _, client) = setup();
+        client.cast_vote(&voter(&env), &1_u64, &VoteChoice::Yes);
+
+        // Advance far beyond the minimum temporary-entry TTL while staying
+        // inside the voting window.
+        env.ledger().with_mut(|l| {
+            l.sequence_number += 2_000;
+            l.timestamp += 600;
+        });
+
+        let tally = client.cast_vote(&voter(&env), &1_u64, &VoteChoice::Yes);
+        assert_eq!(tally.total_voters, 2);
+        assert_eq!(tally.yes_votes, 2);
+    }
+
+    #[test]
+    fn set_market_is_admin_only() {
+        let (env, admin, client) = setup();
+        let market = Address::generate(&env);
+        let err = client
+            .try_set_market(&voter(&env), &market)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, PredictXError::Unauthorized);
+        client.set_market(&admin, &market);
+        assert_eq!(client.market(), Some(market));
     }
 }

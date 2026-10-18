@@ -4,7 +4,7 @@ mod storage;
 mod voting;
 
 use predictx_shared::{PollStatus, PredictXError, VoteChoice, VoteTally, VOTING_WINDOW_SECS};
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec};
+use soroban_sdk::{contract, contractclient, contractimpl, contracttype, Address, Env, Vec};
 
 /// Maximum number of admins that may be registered at once.
 ///
@@ -15,6 +15,13 @@ pub const MAX_VOTERS: u32 = 64;
 
 #[contract]
 pub struct VotingOracle;
+
+/// The slice of the PredictionMarket interface the oracle needs.
+#[allow(dead_code)]
+#[contractclient(name = "MarketClient")]
+pub trait MarketInterface {
+    fn has_user_staked(env: Env, poll_id: u64, user: Address) -> bool;
+}
 
 #[contracttype]
 #[derive(Clone)]
@@ -27,10 +34,12 @@ struct StoredPollStatus {
 #[derive(Clone)]
 enum DataKey {
     Admin,
+    /// PredictionMarket whose stakers are barred from voting. (Instance)
+    Market,
     /// Registered admins `Vec<Address>`. (Instance)
     AdminList,
     PollStatus(u64),
-    /// `poll_id` → vote tally. (Temporary — only needed during the voting window)
+    /// `poll_id` → vote tally. (Persistent — must outlive the window for `auto_resolve`)
     VoteTally(u64),
     /// `poll_id` → automatically resolved outcome.
     PollOutcome(u64),
@@ -155,6 +164,19 @@ impl VotingOracle {
     /// Returns all registered admins.
     pub fn list_admins(env: Env) -> Vec<Address> {
         storage::read_admins(&env)
+    }
+
+    /// Register the PredictionMarket whose stakers may not vote. Admin only.
+    pub fn set_market(env: Env, caller: Address, market: Address) -> Result<(), PredictXError> {
+        storage::require_admin(&env, &caller)?;
+        caller.require_auth();
+        env.storage().instance().set(&DataKey::Market, &market);
+        Ok(())
+    }
+
+    /// The registered PredictionMarket, if any.
+    pub fn market(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::Market)
     }
 
     /// Placeholder oracle state setter.
