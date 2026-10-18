@@ -5,49 +5,6 @@ use predictx_shared::{
 };
 use crate::{DataKey, get_platform_stats, set_platform_stats, token_utils};
 
-/// Resolve a poll using the configured admin and record its final outcome.
-pub fn resolve_poll(
-    env: &Env,
-    admin: Address,
-    poll_id: u64,
-    outcome: bool,
-) -> Result<(), PredictXError> {
-    admin.require_auth();
-    let stored_admin: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(PredictXError::NotInitialized)?;
-    if admin != stored_admin {
-        return Err(PredictXError::Unauthorized);
-    }
-
-    let mut poll: Poll = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Poll(poll_id))
-        .ok_or(PredictXError::PollNotFound)?;
-    if poll.status == PollStatus::Resolved {
-        return Err(PredictXError::PollAlreadyResolved);
-    }
-
-    poll.status = PollStatus::Resolved;
-    poll.outcome = Some(outcome);
-    poll.resolution_time = env.ledger().timestamp();
-    env.storage()
-        .persistent()
-        .set(&DataKey::Poll(poll_id), &poll);
-
-    let total_pool = poll.yes_pool + poll.no_pool;
-    let fee = total_pool * token_utils::get_platform_fee_bps(env) as i128
-        / BPS_DENOMINATOR as i128;
-    env.events().publish(
-        (Symbol::new(env, "PollResolved"), poll_id),
-        (outcome, total_pool, fee),
-    );
-    Ok(())
-}
-
 // ── Payout / claim engine ─────────────────────────────────────────────────────
 
 /// Claim winnings (or a full stake refund) after a poll resolves.
@@ -85,9 +42,6 @@ pub fn claim_winnings(
         return Err(PredictXError::PollNotActive);
     }
 
-    // outcome is always Some(_) for a Resolved poll
-    let outcome_yes: bool = poll.outcome.ok_or(PredictXError::PollNotActive)?;
-
     // ── Load & validate stake ─────────────────────────────────────────────────
 
     let mut stake: Stake = env
@@ -100,54 +54,12 @@ pub fn claim_winnings(
         return Err(PredictXError::AlreadyClaimed);
     }
 
-    // ── Determine winning pool and payout ─────────────────────────────────────
+    // ── Determine payout ──────────────────────────────────────────────────────
 
-    let winning_pool: i128 = if outcome_yes { poll.yes_pool } else { poll.no_pool };
-    let total_pool: i128 = poll.yes_pool + poll.no_pool;
-
-    let payout: i128 = if winning_pool == 0 {
-        // ── Empty winning-pool: full stake refund, no fee ─────────────────────
-        //
-        // Every staker — regardless of which side they chose — recovers their
-        // original stake in full.  No platform fee is deducted because there
-        // is no "winner's profit" to share.
-        //
-        // NOTE: we deliberately skip the `NotOnWinningSide` check here.
-        // Returning that error would leave all funds permanently stranded.
-        stake.amount
-    } else {
-        // ── Normal winning-side claim ─────────────────────────────────────────
-
-        let staker_on_winning_side = match stake.side {
-            StakeSide::Yes => outcome_yes,
-            StakeSide::No => !outcome_yes,
-        };
-
-        if !staker_on_winning_side {
-            return Err(PredictXError::NotOnWinningSide);
-        }
-
-        // Proportional share of total pool, after platform fee.
-        //
-        // payout = stake_amount * total_pool * (BPS_DENOMINATOR - fee_bps)
-        //          / (winning_pool * BPS_DENOMINATOR)
-        //
-        // Integer division rounds down; any dust remains in the contract.
-        let fee_bps = token_utils::get_platform_fee_bps(env);
-        let fee_factor = (BPS_DENOMINATOR - fee_bps) as i128;
-        let bps = BPS_DENOMINATOR as i128;
-
-        let gross = stake.amount * total_pool / winning_pool;
-        let net = gross * fee_factor / bps;
-        let fee = gross - net;
-
-        // Send platform fee to treasury
-        if fee > 0 {
-            token_utils::transfer_to_treasury(env, fee)?;
-        }
-
-        net
-    };
+    let (payout, fee) = compute_payout(env, &poll, &stake)?;
+    if payout == 0 {
+        return Err(PredictXError::NotOnWinningSide);
+    }
 
     // ── Mark claimed & persist ────────────────────────────────────────────────
 
@@ -159,12 +71,15 @@ pub fn claim_winnings(
     // ── Transfer payout to claimant ───────────────────────────────────────────
 
     token_utils::transfer_from_contract(env, &claimant, payout)?;
+    if fee > 0 {
+        token_utils::transfer_to_treasury(env, fee)?;
+    }
 
     // ── Update platform stats ─────────────────────────────────────────────────
 
     let mut stats = get_platform_stats(env);
-    stats.total_value_locked = stats.total_value_locked.saturating_sub(payout);
-    stats.total_payouts += payout;
+    stats.total_value_locked = stats.total_value_locked.saturating_sub(payout + fee);
+    stats.total_payouts = stats.total_payouts.saturating_add(payout);
     set_platform_stats(env, &stats);
 
     // ── Emit event ────────────────────────────────────────────────────────────
@@ -197,28 +112,62 @@ pub fn calculate_winnings(
         return Err(PredictXError::PollNotLocked);
     }
 
-    let outcome = poll.outcome.ok_or(PredictXError::InvalidOutcome)?;
-    let winning_pool = if outcome { poll.yes_pool } else { poll.no_pool };
+    Ok(compute_payout(env, &poll, &stake)?.0)
+}
+
+/// Payout owed to `stake` on a resolved `poll`, as `(payout, platform_fee)`.
+///
+/// Single source of truth for both `claim_winnings` and `calculate_winnings`,
+/// so a quote can never disagree with what a claim actually pays.
+///
+/// - Empty winning pool: every staker is refunded at par, no fee (issue #74).
+/// - Empty losing pool: no-contest, winners are refunded at par, no fee.
+/// - Losing side: `(0, 0)`.
+/// - Otherwise: `gross = stake * total_pool / winning_pool`, and the platform
+///   fee is taken from `gross`. Integer division rounds down; dust stays in
+///   the contract.
+pub(crate) fn compute_payout(
+    env: &Env,
+    poll: &Poll,
+    stake: &Stake,
+) -> Result<(i128, i128), PredictXError> {
+    let outcome_yes = poll.outcome.ok_or(PredictXError::InvalidOutcome)?;
+    let (winning_pool, losing_pool) = if outcome_yes {
+        (poll.yes_pool, poll.no_pool)
+    } else {
+        (poll.no_pool, poll.yes_pool)
+    };
+
     if winning_pool == 0 {
-        return Ok(stake.amount);
-    }
-    if stake.side != if outcome { StakeSide::Yes } else { StakeSide::No } {
-        return Ok(0);
+        return Ok((stake.amount, 0));
     }
 
-    let losing_pool = if outcome { poll.no_pool } else { poll.yes_pool };
+    let on_winning_side = match stake.side {
+        StakeSide::Yes => outcome_yes,
+        StakeSide::No => !outcome_yes,
+    };
+    if !on_winning_side {
+        return Ok((0, 0));
+    }
+
     if losing_pool <= 0 {
-        // No-contest: nothing was staked on the losing side, so there is no
-        // pot to skim a platform fee from. Every winner is refunded their exact
-        // stake rather than a fee-discounted share of a one-sided pool.
-        return Ok(stake.amount);
+        return Ok((stake.amount, 0));
     }
 
-    let total_pool = poll.yes_pool + poll.no_pool;
-    let payout_pool = total_pool
-        * (BPS_DENOMINATOR - token_utils::get_platform_fee_bps(env)) as i128
+    let fee_bps = token_utils::get_platform_fee_bps(env).min(BPS_DENOMINATOR);
+    let total_pool = winning_pool
+        .checked_add(losing_pool)
+        .ok_or(PredictXError::ArithmeticOverflow)?;
+    let gross = stake
+        .amount
+        .checked_mul(total_pool)
+        .ok_or(PredictXError::ArithmeticOverflow)?
+        / winning_pool;
+    let net = gross
+        .checked_mul((BPS_DENOMINATOR - fee_bps) as i128)
+        .ok_or(PredictXError::ArithmeticOverflow)?
         / BPS_DENOMINATOR as i128;
-    Ok(stake.amount * payout_pool / winning_pool)
+    Ok((net, gross - net))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -241,7 +190,6 @@ mod test {
     struct TestSetup<'a> {
         env: Env,
         admin: Address,
-        #[allow(dead_code)]
         oracle_id: Address,
         token_addr: Address,
         contract_id: Address,
@@ -298,6 +246,14 @@ mod test {
             &PollCategory::PlayerEvent,
             &lock_time,
         )
+    }
+
+    /// Mint `amount` to a fresh user and stake it on `side`. Returns the user.
+    fn stake_user(s: &TestSetup, poll_id: u64, side: StakeSide, amount: i128) -> Address {
+        let user = Address::generate(&s.env);
+        mint_tokens(s, &user, amount);
+        s.client.stake(&user, &poll_id, &amount, &side);
+        user
     }
 
     /// Directly inject a resolved poll with a given outcome into storage.
@@ -543,7 +499,7 @@ mod test {
         let s = setup();
         let poll_id = create_poll(&s, 2_000_000);
         let winner = stake_user(&s, poll_id, StakeSide::Yes, 100_000_000);
-        s.client.resolve_poll(&s.admin, &poll_id, &true);
+        s.client.resolve_poll(&s.oracle_id, &poll_id, &true);
 
         let claimed = s.client.claim_winnings(&winner, &poll_id);
 
@@ -558,7 +514,7 @@ mod test {
         let s = setup();
         let poll_id = create_poll(&s, 2_000_000);
         let winner = stake_user(&s, poll_id, StakeSide::No, 50_000_000);
-        s.client.resolve_poll(&s.admin, &poll_id, &false);
+        s.client.resolve_poll(&s.oracle_id, &poll_id, &false);
 
         // The quote and the claim must agree, both fee-free.
         assert_eq!(s.client.calculate_winnings(&poll_id, &winner), 50_000_000);

@@ -80,4 +80,8 @@ pub enum PredictXError {
     OutcomeNotAvailable = 37,
     /// The reward amount must not be negative.
     InvalidRewardAmount = 38,
+    /// An arithmetic operation overflowed.
+    ArithmeticOverflow = 39,
+    /// Fee basis points exceed `BPS_DENOMINATOR`.
+    InvalidFeeBps = 40,
 }

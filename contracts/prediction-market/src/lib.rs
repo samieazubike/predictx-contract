@@ -1,6 +1,7 @@
 #![no_std]
 
 mod matches;
+mod payouts;
 mod staking;
 pub(crate) mod token_utils;
 
@@ -348,6 +349,14 @@ impl PredictionMarket {
             .persistent()
             .set(&DataKey::Poll(poll_id), &poll);
 
+        let total_pool = poll.yes_pool + poll.no_pool;
+        let fee = total_pool * token_utils::get_platform_fee_bps(&env) as i128
+            / predictx_shared::BPS_DENOMINATOR as i128;
+        env.events().publish(
+            (Symbol::new(&env, "PollResolved"), poll_id),
+            (outcome, total_pool, fee),
+        );
+
         Ok(())
     }
 
@@ -454,15 +463,6 @@ impl PredictionMarket {
     }
 
     // ── Payouts ───────────────────────────────────────────────────────────────
-
-    pub fn resolve_poll(
-        env: Env,
-        admin: Address,
-        poll_id: u64,
-        outcome: bool,
-    ) -> Result<(), PredictXError> {
-        payouts::resolve_poll(&env, admin, poll_id, outcome)
-    }
 
     /// Claim winnings after a resolved poll.
     ///
